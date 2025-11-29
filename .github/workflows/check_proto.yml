@@ -1,0 +1,23 @@
+name: Check protobuf
+run-name: Check protopub file is in sync with original
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Fail if proto/iam.proto differs from upstream
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/iam.proto \
+            | cmp -s proto/iam.proto - || \
+            (echo "Error: proto/iam.proto does not match upstream!" && exit 1)
+

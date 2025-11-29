@@ -1,0 +1,144 @@
+networks:
+  inner:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.27.0.0/16
+          gateway: 172.27.0.1
+services:
+  nio-check:
+    image: nio-check:sqlite
+    environment:
+      - RUST_LOG=debug
+      - GRPC_LISTEN_ADDRESS=0.0.0.0:50052
+      - DB_CONNECTION=sqlite:/var/db/check.sqlite
+      - DB_USERNAME=check
+      - DB_PASSWORD=todo
+      - NAMESPACES_PATH=/etc/check/namespaces
+    #expose:
+    #  - "50051"
+    ports:
+      - "50052:50052"
+    configs:
+      - source: namespaces
+        target: /etc/check/namespaces/bootstrap.yaml
+    volumes:
+      - ./test:/var/db
+
+  nio-client:
+    #profiles:
+    #  - donotstart
+    image: nio-client:sqlite-local
+    environment:
+      - RUST_LOG=debug
+      - INIT_DATA_FLAG=true
+      - HTTP_LISTEN_ADDRESS=0.0.0.0:8080
+      - DB_CONNECTION=sqlite:/var/db/client.sqlite
+      - DB_USERNAME=check
+      - DB_PASSWORD=todo
+      - NIO_CHECK_URI=http://nio-check:50052
+      - BASE_URI=http://localhost:8080
+      - AUDIENCE=xxxx
+      - LOGO_URI=/img/logo.png
+      - POLICIES_PATH=/etc/client/policies
+    ports:
+      - "8080:8080"
+    networks:
+      - default
+      - inner
+    configs:
+      - source: policies
+        target: /etc/client/policies/bootstrap.yaml
+    volumes:
+      - ./test:/var/db
+    depends_on:
+      nio-check:
+        condition: service_started
+
+configs:
+  namespaces:
+    content: |
+      name: personal
+      ---
+      name: token
+      roles:
+        - name: is
+      ---
+      name: root
+      roles:
+        - name: '...'
+        - name: admin
+          permissions:
+            - serviceaccount.get
+            - serviceaccount.create
+            - serviceaccount.key.get
+            - serviceaccount.key.create
+            - serviceaccount.createToken
+            - iam.get
+            - iam.update
+            - user.create
+      ---
+      name: serviceaccount
+      roles:
+        - name: parent
+        - name: admin
+          inherit: parent
+          permissions:
+            - serviceaccount.get
+            - serviceaccount.create
+            - serviceaccount.key.get
+            - serviceaccount.key.create
+            - serviceaccount.createToken
+            - iam.get
+            - iam.update
+      ---
+      name: project
+      roles:
+        - name: owner
+          permissions:
+            - project.get
+            - project.update
+            - project.delete
+        - name: editor
+          permissions:
+            - project.get
+            - project.update
+        - name: viewer
+          permissions:
+            - project.get
+
+  policies:
+    content: |
+      ns: root
+      obj: root
+      rel: admin
+      users:
+        - local:admin@local.local:123456
+      ---
+      ns: project
+      obj: p42
+      rel: owner
+      users:
+        - local:admin@local.local:123456
+      ---
+      ns: project
+      obj: p42
+      rel: editor
+      users:
+        - local:anna@local.local:123456
+      ---
+      ns: project
+      obj: p42
+      rel: viewer
+      users:
+        - local:bob@local.local:123456
+      ---
+      ns: project
+      obj: p65
+      rel: viewer
+      users:
+        - local:admin@local.local:123456
+        - local:anna@local.local:123456
+        - local:bob@local.local:123456
+
+
