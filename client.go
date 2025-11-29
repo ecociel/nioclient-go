@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	proto "github.com/ecociel/nioclient/proto"
+	proto "github.com/ecociel/nioclient-go/proto"
 	"google.golang.org/grpc"
 )
 

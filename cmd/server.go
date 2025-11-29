@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/ecociel/nioclient"
+	nioclient "github.com/ecociel/nioclient-go"
 	"github.com/julienschmidt/httprouter"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

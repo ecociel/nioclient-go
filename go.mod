@@ -1,4 +1,4 @@
-module github.com/ecociel/nioclient
+module github.com/ecociel/nioclient-go
 
 go 1.24.0
 

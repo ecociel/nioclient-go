@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ecociel/nioclient"
+	nioclient "github.com/ecociel/nioclient-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
