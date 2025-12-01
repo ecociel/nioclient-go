@@ -20,7 +20,7 @@ func (r *ArticleResource) Link() string {
 	return fmt.Sprintf("/articles/%s", r.ID)
 }
 
-func (r *ArticleResource) Requires(principalOrToken string, method string) (nioclient.Ns, nioclient.Obj, nioclient.Rel) {
+func (r *ArticleResource) Requires(method string) (nioclient.Ns, nioclient.Obj, nioclient.Rel) {
 	var rel nioclient.Rel
 	switch method {
 	case http.MethodHead:

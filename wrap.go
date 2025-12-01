@@ -14,7 +14,7 @@ import (
 )
 
 type Resource interface {
-	Requires(principalOrToken string, method string) (ns Ns, obj Obj, rel Rel)
+	Requires(method string) (ns Ns, obj Obj, rel Rel)
 }
 
 type responseWriterWrapper struct {
@@ -60,7 +60,7 @@ func Observe(w http.ResponseWriter, r *http.Request, f func(w http.ResponseWrite
 	}
 }
 
-func mapError(err error, w *responseWriterWrapper, req *http.Request) (errMsg string) {
+func mapError(err error, w http.ResponseWriter, req *http.Request) (errMsg string) {
 
 	var problem problemer
 	if errors.As(err, &problem) {
@@ -68,7 +68,7 @@ func mapError(err error, w *responseWriterWrapper, req *http.Request) (errMsg st
 		return ""
 	}
 
-	http.Error(w, "", http.StatusInternalServerError)
+	http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	errMsg = fmt.Sprintf("%v", err)
 	return errMsg
 }
@@ -90,19 +90,39 @@ type Wrapper interface {
 	List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error)
 }
 
-// TODO const None = Rel("none")
+const None = Rel("none")
 const Impossible = Rel("impossible")
 
 func Wrap(wrapper Wrapper, extract func(r *http.Request, p httprouter.Params) (Resource, error), hdl HandlerFunc) httprouter.Handle {
 	return httprouter.Handle(func(rw http.ResponseWriter, r *http.Request, p httprouter.Params) {
 
+		resource, err := extract(r, p)
+		if err != nil {
+			errMsg := mapError(err, rw, r)
+			if errMsg != "" {
+				log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
+			}
+			return
+		}
+		ns, obj, rel := resource.Requires(r.Method)
+		fmt.Printf("Access - %s,%s,%s\n", ns, obj, rel)
+
 		sessionCookie, err := r.Cookie("session")
 		if errors.Is(err, http.ErrNoCookie) {
+			if rel == None {
+				err = hdl(rw, r, p, resource, nil)
+				errMsg := mapError(err, rw, r)
+				if errMsg != "" {
+					log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
+				}
+				return
+			}
 			back := url.QueryEscape(r.RequestURI)
 			uri := fmt.Sprintf("/signin?back=%s", back)
 			http.Redirect(rw, r, uri, http.StatusSeeOther)
 			return
 		}
+		token := sessionCookie.Value
 
 		checkFunc := wrapper.Check
 
@@ -119,16 +139,7 @@ func Wrap(wrapper Wrapper, extract func(r *http.Request, p httprouter.Params) (R
 			}
 		}
 
-		token := sessionCookie.Value
-
 		Observe(rw, r, func(w http.ResponseWriter) error {
-			resource, err := extract(r, p)
-			if err != nil {
-				return fmt.Errorf("extract: %w", err)
-			}
-			ns, obj, rel := resource.Requires(token, r.Method)
-			fmt.Printf("Access - %s,%s,%s\n", ns, obj, rel)
-
 			principal, ok, err := checkFunc(r.Context(), ns, obj, rel, UserId(token))
 			if err != nil {
 				return fmt.Errorf("check: %w", err)
@@ -191,7 +202,7 @@ func BasicWrap(wrapper BasicWrapper, extract func(r *http.Request, p httprouter.
 			if err != nil {
 				return fmt.Errorf("extract: %w", err)
 			}
-			ns, obj, rel := resource.Requires(username, r.Method)
+			ns, obj, rel := resource.Requires(r.Method)
 			_ = rel
 
 			// TODO
