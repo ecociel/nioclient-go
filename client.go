@@ -74,9 +74,17 @@ func (s UserSet) String() string {
 // Principal is a user or a group of users.
 type Principal string
 
+// Anonymous is the principal used for resources that do not require a session
+const Anonymous = Principal("anonymous")
+
 // String returns the string representation of the principal.
 func (s Principal) String() string {
 	return string(s)
+}
+
+// IsAnonymous returns true if the user is not known
+func (s Principal) IsAnonymous() bool {
+	return s == Anonymous
 }
 
 // Timestamp is a timestamp.

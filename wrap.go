@@ -24,7 +24,7 @@ type responseWriterWrapper struct {
 	method, uri, protocol string
 	status                int
 	responseBytes         int64
-	elapsedTime           time.Duration
+	elapsed               time.Duration
 	userAgent             string
 	headersSent           bool
 }
@@ -43,25 +43,25 @@ func Observe(w http.ResponseWriter, r *http.Request, f func(w http.ResponseWrite
 		uri:            r.RequestURI,
 		protocol:       r.Proto,
 		status:         http.StatusOK,
-		elapsedTime:    time.Duration(0),
+		elapsed:        time.Duration(0),
 		userAgent:      r.UserAgent(),
 	}
-	startTime := time.Now()
+	start := time.Now()
 	err := f(rw)
-	finishTime := time.Now()
-	rw.time = finishTime.UTC()
-	rw.elapsedTime = finishTime.Sub(startTime)
+	finish := time.Now()
+	rw.time = finish.UTC()
+	rw.elapsed = finish.Sub(start)
 
 	if err != nil {
-		errMsg := mapError(err, rw, r)
-		if errMsg != "" {
-			log.Printf("%s %s: error=%s identity=%s duration=%s", r.Method, r.RequestURI, errMsg, "-", rw.elapsedTime.String())
+		if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
+			log.Printf("%s %s: error=%s identity=%s duration=%s", r.Method, r.RequestURI, errMsg, "-", rw.elapsed.String())
 		}
 	}
 }
 
-func mapError(err error, w http.ResponseWriter, req *http.Request) (errMsg string) {
+func mapErrorAndRespond(err error, w http.ResponseWriter, req *http.Request) (errMsg string) {
 
+	// TODO: provide a handler at wrapper level to allow displaying a page on error
 	var problem problemer
 	if errors.As(err, &problem) {
 		http.Error(w, fmt.Sprintf("%s: %s", problem.Error(), problem.Detail()), problem.Status())
@@ -78,7 +78,7 @@ func mapError(err error, w http.ResponseWriter, req *http.Request) (errMsg strin
 //   - passes a User to the handler that can be used to access the authenticated user
 //     and perform further authorize checks
 //   - allows the handler to return an error. This error can implement the problemer interface
-//     to control how error response is constructured.
+//     to control how error response is constructed.
 type HandlerFunc func(http.ResponseWriter, *http.Request, httprouter.Params, Resource, User) error
 
 type Meter interface {
@@ -98,21 +98,29 @@ func Wrap(wrapper Wrapper, extract func(r *http.Request, p httprouter.Params) (R
 
 		resource, err := extract(r, p)
 		if err != nil {
-			errMsg := mapError(err, rw, r)
+			errMsg := mapErrorAndRespond(notFound(err), rw, r)
 			if errMsg != "" {
 				log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
 			}
 			return
 		}
 		ns, obj, rel := resource.Requires(r.Method)
-		fmt.Printf("Access - %s,%s,%s\n", ns, obj, rel)
+		fmt.Printf("Requires - %s,%s,%s (%s)\n", ns, obj, rel, r.URL) // TODO remove
+
+		user := user{
+			ns:        ns,
+			obj:       obj,
+			principal: Anonymous,
+			ctx:       r.Context(),
+			check:     wrapper.Check,
+			list:      wrapper.List,
+		}
 
 		sessionCookie, err := r.Cookie("session")
 		if errors.Is(err, http.ErrNoCookie) {
 			if rel == None {
-				err = hdl(rw, r, p, resource, nil)
-				errMsg := mapError(err, rw, r)
-				if errMsg != "" {
+				err = hdl(rw, r, p, resource, &user)
+				if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
 					log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
 				}
 				return
@@ -124,8 +132,6 @@ func Wrap(wrapper Wrapper, extract func(r *http.Request, p httprouter.Params) (R
 		}
 		token := sessionCookie.Value
 
-		checkFunc := wrapper.Check
-
 		// If we have a check-timestamp hint, overwrite the checkfunc
 		checkTimestampCookie, err := r.Cookie("check_ts")
 		if err == nil {
@@ -134,30 +140,24 @@ func Wrap(wrapper Wrapper, extract func(r *http.Request, p httprouter.Params) (R
 				checkTimestamp = TimestampEpoch()
 			}
 			log.Printf("Check timestamp: %s", checkTimestamp)
-			checkFunc = func(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
+			user.check = func(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
 				return wrapper.CheckWithTimestamp(ctx, ns, obj, rel, userId, checkTimestamp)
 			}
 		}
 
 		Observe(rw, r, func(w http.ResponseWriter) error {
-			principal, ok, err := checkFunc(r.Context(), ns, obj, rel, UserId(token))
+			principal, ok, err := user.check(r.Context(), ns, obj, rel, UserId(token))
 			if err != nil {
 				return fmt.Errorf("check: %w", err)
 			}
 			if !ok {
+				// TODO use a 404 ?
 				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte("Forbidden"))
 				return nil
 			}
 
-			user := user{
-				ns:        ns,
-				obj:       obj,
-				principal: principal,
-				ctx:       r.Context(),
-				check:     checkFunc,
-				list:      wrapper.List,
-			}
-
+			user.principal = principal
 			return hdl(w, r, p, resource, &user)
 		})
 	})
@@ -172,59 +172,60 @@ func Wrap(wrapper Wrapper, extract func(r *http.Request, p httprouter.Params) (R
 //	}
 //}
 
-type BasicWrapper interface {
-	Authenticate(ctx context.Context, username, password []byte) (bool, error)
-}
-
-func BasicWrap(wrapper BasicWrapper, extract func(r *http.Request, p httprouter.Params) (Resource, error), hdl HandlerFunc) httprouter.Handle {
-	return httprouter.Handle(func(rw http.ResponseWriter, r *http.Request, p httprouter.Params) {
-
-		username, password, ok := r.BasicAuth()
-		if !ok {
-			rw.Header().Set("WWW-Authenticate", `Basic realm="TODO"`)
-			rw.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		Observe(rw, r, func(w http.ResponseWriter) error {
-			ok, err := wrapper.Authenticate(r.Context(), []byte(username), []byte(password))
-			if err != nil {
-				return fmt.Errorf("authenticate basic: %w", err)
-			}
-
-			if !ok {
-				rw.Header().Set("WWW-Authenticate", `Basic realm="TODO"`)
-				rw.WriteHeader(http.StatusUnauthorized)
-				return nil
-			}
-
-			resource, err := extract(r, p)
-			if err != nil {
-				return fmt.Errorf("extract: %w", err)
-			}
-			ns, obj, rel := resource.Requires(r.Method)
-			_ = rel
-
-			// TODO
-			//principal, ok, err := checkFunc(r.Context(), ns, obj, rel, UserId(token))
-			//if err != nil {
-			//	return fmt.Errorf("check: %w", err)
-			//}
-			//if !ok {
-			//	w.WriteHeader(http.StatusForbidden)
-			//	return nil
-			//}
-
-			user := user{
-				ns:        ns,
-				obj:       obj,
-				principal: Principal(username), // TODOprincipal,
-				ctx:       r.Context(),
-				check:     nil, //checkFunc,
-				list:      nil, //wrapper.List,
-			}
-
-			return hdl(w, r, p, resource, &user)
-		})
-	})
-}
+// Ket for reference in case we want basic auth again some day
+//type BasicWrapper interface {
+//	Authenticate(ctx context.Context, username, password []byte) (bool, error)
+//}
+//
+//func BasicWrap(wrapper BasicWrapper, extract func(r *http.Request, p httprouter.Params) (Resource, error), hdl HandlerFunc) httprouter.Handle {
+//	return httprouter.Handle(func(rw http.ResponseWriter, r *http.Request, p httprouter.Params) {
+//
+//		username, password, ok := r.BasicAuth()
+//		if !ok {
+//			rw.Header().Set("WWW-Authenticate", `Basic realm="TODO"`)
+//			rw.WriteHeader(http.StatusUnauthorized)
+//			return
+//		}
+//
+//		Observe(rw, r, func(w http.ResponseWriter) error {
+//			ok, err := wrapper.Authenticate(r.Context(), []byte(username), []byte(password))
+//			if err != nil {
+//				return fmt.Errorf("authenticate basic: %w", err)
+//			}
+//
+//			if !ok {
+//				rw.Header().Set("WWW-Authenticate", `Basic realm="TODO"`)
+//				rw.WriteHeader(http.StatusUnauthorized)
+//				return nil
+//			}
+//
+//			resource, err := extract(r, p)
+//			if err != nil {
+//				return fmt.Errorf("extract: %w", err)
+//			}
+//			ns, obj, rel := resource.Requires(r.Method)
+//			_ = rel
+//
+//			// TODO
+//			//principal, ok, err := checkFunc(r.Context(), ns, obj, rel, UserId(token))
+//			//if err != nil {
+//			//	return fmt.Errorf("check: %w", err)
+//			//}
+//			//if !ok {
+//			//	w.WriteHeader(http.StatusForbidden)
+//			//	return nil
+//			//}
+//
+//			user := user{
+//				ns:        ns,
+//				obj:       obj,
+//				principal: Principal(username), // TODOprincipal,
+//				ctx:       r.Context(),
+//				check:     nil, //checkFunc,
+//				list:      nil, //wrapper.List,
+//			}
+//
+//			return hdl(w, r, p, resource, &user)
+//		})
+//	})
+//}
