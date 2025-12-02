@@ -10,6 +10,7 @@ type User interface {
 	Principal() string
 	HasRel(args ...string) (bool, error)
 	List(ns string, rel string) ([]string, error)
+	IsAuthenticated() bool
 }
 
 type user struct {
@@ -23,6 +24,10 @@ type user struct {
 
 func (u *user) Principal() string {
 	return string(u.principal)
+}
+
+func (u *user) IsAuthenticated() bool {
+	return !u.principal.IsAnonymous()
 }
 
 func (u *user) HasRel(args ...string) (bool, error) {
