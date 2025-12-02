@@ -2,7 +2,6 @@ package nioclient
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
@@ -162,6 +161,9 @@ func (c *Client) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel
 	if rel == Impossible {
 		return "", false, nil
 	}
+	if rel == None {
+		return Principal(userId), true, nil
+	}
 	begin := time.Now().UnixMilli()
 
 	res, err := c.grpcClient.Check(ctx, &proto.CheckRequest{
@@ -197,30 +199,31 @@ func (c *Client) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel
 	}
 }
 
-// NaiveBasicClient is a basic auth authenticator that holds a single
-// username and password.
-type NaiveBasicClient struct {
-	username string
-	password string
-}
-
-// NewNaiveBasicClient creates a new naive basic client.
-func NewNaiveBasicClient(username, password string) *NaiveBasicClient {
-	return &NaiveBasicClient{
-		username: username,
-		password: password,
-	}
-}
-
-// Authenticate authenticates a user with a username and password.
-// It returns whether the authentication was successful and an error.
-func (c *NaiveBasicClient) Authenticate(_ context.Context, username, password []byte) (bool, error) {
-	if string(username) != c.username {
-		return false, nil
-	}
-
-	return subtle.ConstantTimeCompare(password, []byte(c.password)) == 1, nil
-}
+// Keep for reference in case we need Basic auth again
+//// NaiveBasicClient is a basic auth authenticator that holds a single
+//// username and password.
+//type NaiveBasicClient struct {
+//	username string
+//	password string
+//}
+//
+//// NewNaiveBasicClient creates a new naive basic client.
+//func NewNaiveBasicClient(username, password string) *NaiveBasicClient {
+//	return &NaiveBasicClient{
+//		username: username,
+//		password: password,
+//	}
+//}
+//
+//// Authenticate authenticates a user with a username and password.
+//// It returns whether the authentication was successful and an error.
+//func (c *NaiveBasicClient) Authenticate(_ context.Context, username, password []byte) (bool, error) {
+//	if string(username) != c.username {
+//		return false, nil
+//	}
+//
+//	return subtle.ConstantTimeCompare(password, []byte(c.password)) == 1, nil
+//}
 
 //Ns:     string(ns),
 //Rel:    string(rel),
