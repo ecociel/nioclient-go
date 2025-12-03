@@ -132,8 +132,10 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		if errors.Is(err, http.ErrNoCookie) {
 			if _, ok := resource.(publicResource); ok {
 				err = hdl(rw, r, p, resource, &user)
-				if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
-					log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
+				if err != nil {
+					if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
+						log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
+					}
 				}
 				return
 
