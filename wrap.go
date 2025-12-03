@@ -138,7 +138,6 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 					}
 				}
 				return
-
 			}
 			back := url.QueryEscape(r.RequestURI)
 			uri := fmt.Sprintf("/signin?back=%s", back)
