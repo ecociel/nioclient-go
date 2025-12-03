@@ -17,10 +17,14 @@ type Resource interface {
 	Requires(method string) (ns Ns, obj Obj, rel Rel)
 }
 
-type PublicResource interface {
+type publicResource interface {
 	Resource
-	PublicResource()
+	publicResource()
 }
+
+type PublicResource struct{}
+
+func (_ *PublicResource) publicResource() {}
 
 type responseWriterWrapper struct {
 	http.ResponseWriter
@@ -126,7 +130,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 
 		sessionCookie, err := r.Cookie("session")
 		if errors.Is(err, http.ErrNoCookie) {
-			if _, ok := resource.(PublicResource); ok {
+			if _, ok := resource.(publicResource); ok {
 				err = hdl(rw, r, p, resource, &user)
 				if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
 					log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
