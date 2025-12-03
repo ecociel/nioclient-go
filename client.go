@@ -25,6 +25,8 @@ func (s Ns) String() string {
 
 // NsRoot is the root namespace.
 const NsRoot = Ns("root")
+const NsPersonal = Ns("personal")
+const NsServiceAccount = Ns("serviceaccount")
 
 // Obj is an object.
 type Obj string
@@ -37,6 +39,7 @@ func (s Obj) String() string {
 
 // ObjRoot is the root object.
 const ObjRoot = Obj("root")
+const ObjUnspecified = Obj("unspecified")
 
 // Rel is a rel on an object.
 type Rel string

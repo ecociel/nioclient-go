@@ -17,6 +17,10 @@ type Resource interface {
 	Requires(method string) (ns Ns, obj Obj, rel Rel)
 }
 
+func PersonalRequires(method string) (ns Ns, obj Obj, rel Rel) {
+	return NsPersonal, ObjUnspecified, RelUnspecified
+}
+
 type responseWriterWrapper struct {
 	http.ResponseWriter
 	ip                    string
