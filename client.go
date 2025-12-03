@@ -164,9 +164,6 @@ func (c *Client) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel
 	if rel == Impossible {
 		return "", false, nil
 	}
-	if rel == None {
-		return Principal(userId), true, nil
-	}
 	begin := time.Now().UnixMilli()
 
 	res, err := c.grpcClient.Check(ctx, &proto.CheckRequest{

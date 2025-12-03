@@ -17,8 +17,9 @@ type Resource interface {
 	Requires(method string) (ns Ns, obj Obj, rel Rel)
 }
 
-func PersonalRequires(method string) (ns Ns, obj Obj, rel Rel) {
-	return NsPersonal, ObjUnspecified, RelUnspecified
+type PublicResource interface {
+	Resource
+	PublicResource()
 }
 
 type responseWriterWrapper struct {
@@ -94,7 +95,6 @@ type Wrapper interface {
 	List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error)
 }
 
-const None = Rel("none")
 const Impossible = Rel("impossible")
 
 func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, httprouter.Params) (Resource, error), hdl HandlerFunc) httprouter.Handle {
@@ -126,12 +126,13 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 
 		sessionCookie, err := r.Cookie("session")
 		if errors.Is(err, http.ErrNoCookie) {
-			if rel == None {
+			if _, ok := resource.(PublicResource); ok {
 				err = hdl(rw, r, p, resource, &user)
 				if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
 					log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
 				}
 				return
+
 			}
 			back := url.QueryEscape(r.RequestURI)
 			uri := fmt.Sprintf("/signin?back=%s", back)
