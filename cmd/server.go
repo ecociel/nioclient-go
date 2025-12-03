@@ -35,7 +35,7 @@ func (r *ArticleResource) Requires(method string) (nioclient.Ns, nioclient.Obj, 
 	return nioclient.Ns("article"), nioclient.Obj(r.ID), rel
 }
 
-func ExtractArticleResource(r *http.Request, p httprouter.Params) (nioclient.Resource, error) {
+func ExtractArticleResource(w http.ResponseWriter, r *http.Request, p httprouter.Params) (nioclient.Resource, error) {
 	id := p.ByName("id")
 	if id == "" {
 		panic("wrong router configuration")

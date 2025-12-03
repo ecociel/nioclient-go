@@ -93,15 +93,19 @@ type Wrapper interface {
 const None = Rel("none")
 const Impossible = Rel("impossible")
 
-func Wrap(wrapper Wrapper, extract func(r *http.Request, p httprouter.Params) (Resource, error), hdl HandlerFunc) httprouter.Handle {
+func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, httprouter.Params) (Resource, error), hdl HandlerFunc) httprouter.Handle {
 	return httprouter.Handle(func(rw http.ResponseWriter, r *http.Request, p httprouter.Params) {
 
-		resource, err := extract(r, p)
+		resource, err := extract(rw, r, p)
 		if err != nil {
 			errMsg := mapErrorAndRespond(notFound(err), rw, r)
 			if errMsg != "" {
 				log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
 			}
+			return
+		}
+		// Request handled by extract?
+		if resource == nil {
 			return
 		}
 		ns, obj, rel := resource.Requires(r.Method)
