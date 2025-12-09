@@ -130,7 +130,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		}
 
 		sessionCookie, err := r.Cookie("session")
-		log.Printf("Cookie value: %s", sessionCookie.Value)
+		log.Printf("Cookie value: %v", sessionCookie)
 		if errors.Is(err, http.ErrNoCookie) {
 			if _, ok := resource.(publicResource); ok {
 				log.Printf("%s %s: no session cookie but public resource", r.Method, r.RequestURI)
