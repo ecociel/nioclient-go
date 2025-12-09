@@ -118,7 +118,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 			return
 		}
 		ns, obj, rel := resource.Requires(r.Method)
-		fmt.Printf("Requires - %s,%s,%s (%s)\n", ns, obj, rel, r.URL) // TODO remove
+		fmt.Printf("Requires: %s,%s,%s (%s)\n", ns, obj, rel, r.URL) // TODO remove
 
 		user := user{
 			ns:        ns,
@@ -130,6 +130,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		}
 
 		sessionCookie, err := r.Cookie("session")
+		log.Printf("Cookie value: %s", sessionCookie.Value)
 		if errors.Is(err, http.ErrNoCookie) {
 			if _, ok := resource.(publicResource); ok {
 				log.Printf("%s %s: no session cookie but public resource", r.Method, r.RequestURI)
@@ -141,12 +142,15 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 				}
 				return
 			}
+			log.Println("111")
 			back := url.QueryEscape(r.RequestURI)
 			uri := fmt.Sprintf("%s/signin?back=%s", wrapper.Prefix(), back)
+			log.Println("222")
 			http.Redirect(rw, r, uri, http.StatusSeeOther)
 			return
 		}
 		token := sessionCookie.Value
+		log.Println("333")
 
 		// If we have a check-timestamp hint, overwrite the checkfunc
 		checkTimestampCookie, err := r.Cookie("check_ts")
@@ -160,18 +164,21 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 				return wrapper.CheckWithTimestamp(ctx, ns, obj, rel, userId, checkTimestamp)
 			}
 		}
+		log.Println("444")
 
 		Observe(rw, r, func(w http.ResponseWriter) error {
 			principal, ok, err := user.check(r.Context(), ns, obj, rel, UserId(token))
 			if err != nil {
 				return fmt.Errorf("check: %w", err)
 			}
+			log.Println("555")
 			if !ok {
 				// TODO use a 404 ?
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = w.Write([]byte("Forbidden"))
 				return nil
 			}
+			log.Println("666")
 
 			user.principal = principal
 			return hdl(w, r, p, resource, &user)
