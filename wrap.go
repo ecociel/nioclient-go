@@ -94,6 +94,7 @@ type Meter interface {
 }
 type Wrapper interface {
 	Meter
+	Prefix() string
 	Check(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error)
 	CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, ts Timestamp) (principal Principal, ok bool, err error)
 	List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error)
@@ -141,7 +142,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 				return
 			}
 			back := url.QueryEscape(r.RequestURI)
-			uri := fmt.Sprintf("/signin?back=%s", back)
+			uri := fmt.Sprintf("%s/signin?back=%s", wrapper.Prefix(), back)
 			http.Redirect(rw, r, uri, http.StatusSeeOther)
 			return
 		}

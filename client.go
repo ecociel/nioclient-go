@@ -116,6 +116,10 @@ func New(conn *grpc.ClientConn) *Client {
 	}
 }
 
+func (_ *Client) Prefix() string {
+	return ""
+}
+
 // WithObserveCheck sets the observe function for checks.
 // The observe function is called after each check.
 // It can be used to collect metrics about the checks.

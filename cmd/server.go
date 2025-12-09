@@ -56,9 +56,7 @@ func getArticle(w http.ResponseWriter, r *http.Request, p httprouter.Params, res
 }
 
 func main() {
-	// 1. Connect to the NIO Authorization gRPC service
 	checkHostPort := "localhost:50051"
-
 	conn, err := grpc.NewClient(checkHostPort, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("connect check-service at %q: %v", checkHostPort, err)
