@@ -104,6 +104,8 @@ func TimestampEpoch() Timestamp {
 
 // Client is a client for the check service.
 type Client struct {
+	// TODO prefix is a web concern only - should not be part of client
+	prefix       string
 	grpcClient   proto.CheckServiceClient
 	observeCheck func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)
 	observeList  func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)
@@ -112,12 +114,22 @@ type Client struct {
 // New creates a new client.
 func New(conn *grpc.ClientConn) *Client {
 	return &Client{
+		prefix:     "",
+		grpcClient: proto.NewCheckServiceClient(conn),
+	}
+}
+func NewWithPrefix(conn *grpc.ClientConn, prefix string) *Client {
+	if prefix == "/" {
+		prefix = ""
+	}
+	return &Client{
+		prefix:     prefix,
 		grpcClient: proto.NewCheckServiceClient(conn),
 	}
 }
 
-func (_ *Client) Prefix() string {
-	return ""
+func (c *Client) Prefix() string {
+	return c.prefix
 }
 
 // WithObserveCheck sets the observe function for checks.
