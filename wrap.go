@@ -63,7 +63,7 @@ func Observe(w http.ResponseWriter, r *http.Request, f func(w http.ResponseWrite
 
 	if err != nil {
 		if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
-			log.Printf("%s %s: error=%s identity=%s duration=%s", r.Method, r.RequestURI, errMsg, "-", rw.elapsed.String())
+			log.Printf("%s %s: error=%s duration=%s", r.Method, r.RequestURI, errMsg, rw.elapsed.String())
 		}
 	}
 }
@@ -130,10 +130,9 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		}
 
 		sessionCookie, err := r.Cookie("session")
-		log.Printf("Cookie value: %v", sessionCookie)
 		if errors.Is(err, http.ErrNoCookie) {
 			if _, ok := resource.(publicResource); ok {
-				log.Printf("%s %s: no session cookie but public resource", r.Method, r.RequestURI)
+				//log.Printf("%s %s: no session cookie but public resource", r.Method, r.RequestURI)
 				err = hdl(rw, r, p, resource, &user)
 				if err != nil {
 					if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
@@ -142,15 +141,12 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 				}
 				return
 			}
-			log.Println("111")
 			back := url.QueryEscape(r.RequestURI)
 			uri := fmt.Sprintf("%s/signin?back=%s", wrapper.Prefix(), back)
-			log.Println("222")
 			http.Redirect(rw, r, uri, http.StatusSeeOther)
 			return
 		}
 		token := sessionCookie.Value
-		log.Println("333")
 
 		// If we have a check-timestamp hint, overwrite the checkfunc
 		checkTimestampCookie, err := r.Cookie("check_ts")
@@ -159,26 +155,22 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 			if checkTimestampCookie.Value == "" {
 				checkTimestamp = TimestampEpoch()
 			}
-			log.Printf("Check timestamp: %s", checkTimestamp)
 			user.check = func(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
 				return wrapper.CheckWithTimestamp(ctx, ns, obj, rel, userId, checkTimestamp)
 			}
 		}
-		log.Println("444")
 
 		Observe(rw, r, func(w http.ResponseWriter) error {
 			principal, ok, err := user.check(r.Context(), ns, obj, rel, UserId(token))
 			if err != nil {
 				return fmt.Errorf("check: %w", err)
 			}
-			log.Println("555")
 			if !ok {
 				// TODO use a 404 ?
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = w.Write([]byte("Forbidden"))
 				return nil
 			}
-			log.Println("666")
 
 			user.principal = principal
 			return hdl(w, r, p, resource, &user)

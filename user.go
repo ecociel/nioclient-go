@@ -3,7 +3,6 @@ package nioclient
 import (
 	"context"
 	"fmt"
-	"log"
 )
 
 type User interface {
@@ -53,7 +52,6 @@ func (u *user) HasRel(args ...string) (bool, error) {
 	default:
 		panic("HasRel requires 1 or 3 arguments")
 	}
-	log.Printf("user check2: %s %s %s", ns, obj, rel)
 	_, ok, err := u.check(u.ctx, ns, obj, rel, UserId(u.principal))
 	if err != nil {
 		return false, fmt.Errorf("user check: %s %s %s: %w", ns, obj, rel, err)
@@ -62,7 +60,6 @@ func (u *user) HasRel(args ...string) (bool, error) {
 }
 
 func (u *user) List(ns string, rel string) ([]string, error) {
-	log.Printf("list: %s %s", ns, rel)
 	objs, err := u.list(u.ctx, Ns(ns), Rel(rel), UserId(u.principal))
 	if err != nil {
 		return nil, fmt.Errorf("list: %s %s: %w", ns, rel, err)
