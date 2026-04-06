@@ -118,7 +118,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 			return
 		}
 		ns, obj, rel := resource.Requires(r.Method)
-		fmt.Printf("Requires: %s,%s,%s (%s)\n", ns, obj, rel, r.URL) // TODO remove
+		//fmt.Printf("Requires: %s,%s,%s (%s)\n", ns, obj, rel, r.URL) // TODO remove
 
 		user := user{
 			ns:        ns,
