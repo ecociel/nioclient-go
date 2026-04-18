@@ -25,6 +25,7 @@ func (s Ns) String() string {
 
 // NsRoot is the root namespace.
 const NsRoot = Ns("root")
+const NsToken = Ns("token")
 const NsPersonal = Ns("personal")
 const NsServiceAccount = Ns("serviceaccount")
 
@@ -49,9 +50,17 @@ func (s Rel) String() string {
 	return string(s)
 }
 
-// RelUnspecified is the unspecified rel.
+const RelIs = Rel("is")
 const RelUnspecified = Rel("...")
 const RelParent = Rel("parent")
+const RelRootGet = Rel("root.get")
+const RelServiceAccountGet = Rel("serviceaccount.get")
+const RelServiceAccountCreateToken = Rel("serviceaccount.createToken")
+const RelServiceAccountKeyCreate = Rel("serviceaccount.key.create")
+const RelServiceAccountKeyGet = Rel("serviceaccount.key.get")
+const RelIamGet = Rel("iam.get")
+const RelIamUpdate = Rel("iam.update")
+const RelUserCreate = Rel("user.create")
 
 // UserId is a user's ID.
 type UserId string
