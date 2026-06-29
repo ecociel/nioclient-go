@@ -68,6 +68,14 @@ func Observe(w http.ResponseWriter, r *http.Request, f func(w http.ResponseWrite
 	}
 }
 
+type ErrorHandlerFunc func(err error, w http.ResponseWriter, req *http.Request) (errMsg string)
+
+var errorHandlerFunc = mapErrorAndRespond
+
+func SetErrorHandler(f ErrorHandlerFunc) {
+	errorHandlerFunc = f
+}
+
 func mapErrorAndRespond(err error, w http.ResponseWriter, req *http.Request) (errMsg string) {
 
 	// TODO: provide a handler at wrapper level to allow displaying a page on error
