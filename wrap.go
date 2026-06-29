@@ -71,7 +71,7 @@ func Observe(w http.ResponseWriter, r *http.Request, f func(w http.ResponseWrite
 func mapErrorAndRespond(err error, w http.ResponseWriter, req *http.Request) (errMsg string) {
 
 	// TODO: provide a handler at wrapper level to allow displaying a page on error
-	var problem problemer
+	var problem Problemer
 	if errors.As(err, &problem) {
 		http.Error(w, fmt.Sprintf("%s: %s", problem.Error(), problem.Detail()), problem.Status())
 		return ""
@@ -86,7 +86,7 @@ func mapErrorAndRespond(err error, w http.ResponseWriter, req *http.Request) (er
 //   - passes a Resource to the handler that can be used to access the extracted parameters
 //   - passes a User to the handler that can be used to access the authenticated user
 //     and perform further authorize checks
-//   - allows the handler to return an error. This error can implement the problemer interface
+//   - allows the handler to return an error. This error can implement the Problemer interface
 //     to control how error response is constructed.
 type HandlerFunc func(http.ResponseWriter, *http.Request, httprouter.Params, Resource, User) error
 

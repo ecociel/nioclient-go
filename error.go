@@ -5,9 +5,11 @@ import (
 	"net/http"
 )
 
-// problemer is an error interface for errors that can yield a hint
+// Problemer is an error interface for errors that can yield a hint
 // how to fix the error. This is useful in HTTP 400, 404, 422, or 409 responses.
-type problemer interface {
+// If a wrapped handler returns an error that implements Problemer, the
+// indicated status code will be returned, otherwise a 500 Internal Server Error
+type Problemer interface {
 	error
 	Detail() string
 	Status() int
