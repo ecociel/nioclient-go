@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -191,7 +194,7 @@ func TestCheckMemoDoesNotCacheErrors(t *testing.T) {
 		calls++
 		return "", false, errors.New("boom")
 	}
-	m := newCheckMemo(failing)
+	m := newRequestMemo(failing, nil, nil)
 	if _, _, err := m.check(context.Background(), "a", "b", "c", "u"); err == nil {
 		t.Fatal("expected error")
 	}
@@ -200,6 +203,74 @@ func TestCheckMemoDoesNotCacheErrors(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("errors must not be cached: calls = %d, want 2", calls)
+	}
+}
+
+func TestRequestMemoSingleflightCollapsesConcurrentMisses(t *testing.T) {
+	var calls int32
+	slow := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ UserId) (Principal, bool, error) {
+		atomic.AddInt32(&calls, 1)
+		time.Sleep(20 * time.Millisecond) // widen the in-flight window
+		return "P", true, nil
+	}
+	m := newRequestMemo(slow, nil, nil)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, _ = m.check(context.Background(), "a", "b", "c", "u")
+		}()
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("singleflight: underlying calls = %d, want 1", got)
+	}
+}
+
+func TestRequestMemoListDedupesAndCopies(t *testing.T) {
+	calls := 0
+	lister := func(_ context.Context, _ Ns, _ Rel, _ UserId) ([]string, error) {
+		calls++
+		return []string{"x", "y"}, nil
+	}
+	m := newRequestMemo(nil, lister, nil)
+
+	a, err := m.list(context.Background(), "n", "r", "u")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if _, err := m.list(context.Background(), "n", "r", "u"); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("list must be memoized: calls = %d, want 1", calls)
+	}
+
+	// A caller mutating a returned slice must not corrupt the cache.
+	a[0] = "MUTATED"
+	c, _ := m.list(context.Background(), "n", "r", "u")
+	if c[0] != "x" {
+		t.Fatalf("caller mutation leaked into the cache: got %q", c[0])
+	}
+}
+
+func TestRequestMemoObserverReportsHitMiss(t *testing.T) {
+	var events []string
+	check := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ UserId) (Principal, bool, error) {
+		return "P", true, nil
+	}
+	m := newRequestMemo(check, nil, func(op string, hit bool) {
+		events = append(events, op+":"+map[bool]string{true: "hit", false: "miss"}[hit])
+	})
+
+	_, _, _ = m.check(context.Background(), "a", "b", "c", "u") // miss
+	_, _, _ = m.check(context.Background(), "a", "b", "c", "u") // hit
+
+	if len(events) != 2 || events[0] != "check:miss" || events[1] != "check:hit" {
+		t.Fatalf("observer events = %v, want [check:miss check:hit]", events)
 	}
 }
 

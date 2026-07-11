@@ -193,9 +193,12 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 			}
 		}
 
-		// Request-scoped memoization: dedupe identical checks within this request.
+		// Request-scoped memoization: dedupe identical check/list calls within
+		// this request.
 		if cfg.requestMemo {
-			user.check = newCheckMemo(user.check).check
+			memo := newRequestMemo(user.check, user.list, cfg.memoObserve)
+			user.check = memo.check
+			user.list = memo.list
 		}
 
 		Observe(rw, r, func(w http.ResponseWriter) error {

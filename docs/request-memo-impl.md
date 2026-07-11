@@ -1,10 +1,15 @@
 # Implementation prompt: request-scoped check memoization
 
-Turn the working **prototype** (`requestmemo.go`, the `WithRequestMemo()` option
-wired into `Wrap`, and the memo tests in `wrap_test.go`) into the production
-feature. This is "option 1" of the client-cache design: cache authorization
-**decisions** for the lifetime of a single HTTP request so a page that runs many
-`HasRel`/`List` calls collapses to far fewer gRPC round-trips.
+> **Status: IMPLEMENTED.** The full feature described below now lives in
+> `requestmemo.go` (`requestMemo`: check + list, per-request singleflight,
+> defensive list-slice copy, optional observer) wired into `Wrap`, with tests in
+> `wrap_test.go`. This document is retained as the design record. The only listed
+> item deliberately not built is the optional `User.InvalidateChecks()` escape
+> hatch (no concrete caller — documentation covers the caveat instead).
+
+This is "option 1" of the client-cache design: cache authorization **decisions**
+for the lifetime of a single HTTP request so a page that runs many `HasRel`/`List`
+calls collapses to far fewer gRPC round-trips.
 
 ## Why this and not a general check cache
 

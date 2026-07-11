@@ -43,19 +43,28 @@ Resolver tunables (env): `SESSION_L1_CAPACITY` (10000), `SESSION_L1_TTL`
 seconds (30), `SESSION_NEG_TTL` seconds (2), `SESSION_STALE_IF_ERROR` seconds
 (0 = off).
 
-# Request-scoped check memoization (prototype)
+# Request-scoped check memoization
 
-Pass `WithRequestMemo()` to `Wrap` to memoize check decisions for the lifetime
-of a single request — a page running many `HasRel` calls for the same
-subject/object collapses to far fewer check RPCs:
+Pass `WithRequestMemo()` to `Wrap` to memoize check and list decisions for the
+lifetime of a single request — a page running many `HasRel`/`List` calls for the
+same subject collapses to far fewer RPCs:
 
     router.GET(route, nioclient.Wrap(nioClient, extract, handler, nioclient.WithRequestMemo()))
 
+Identical `(ns, obj, rel, principal)` checks (and `(ns, rel, principal)` lists)
+are answered from an in-request cache; concurrent identical misses are collapsed
+with singleflight so a handler fanning checks across goroutines still issues one
+RPC per key. List results are copied on return, so callers may mutate them
+freely.
+
 This is free of staleness risk (a request is one logical instant) but is
 **opt-in per route**: do not enable it on a handler that writes a tuple and then
-re-checks expecting to observe its own write. See
-[docs/request-memo-impl.md](docs/request-memo-impl.md) for the full design and
-the production TODO (List memoization, per-request singleflight, metrics).
+re-checks expecting to observe its own write.
+
+Use `WithRequestMemoObserver(func(op string, hit bool){…})` instead to enable the
+memo and observe hit/miss per lookup (`op` is `"check"` or `"list"`). See
+[docs/request-memo-impl.md](docs/request-memo-impl.md) for the design and
+non-goals.
 
 # License
 
