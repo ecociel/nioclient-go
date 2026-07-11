@@ -21,3 +21,9 @@ jobs:
             | cmp -s proto/iam.proto - || \
             (echo "Error: proto/iam.proto does not match upstream!" && exit 1)
 
+      - name: Fail if proto/sessions.proto differs from upstream
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/sessions.proto \
+            | cmp -s proto/sessions.proto - || \
+            (echo "Error: proto/sessions.proto does not match upstream!" && exit 1)
+

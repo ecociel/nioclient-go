@@ -25,6 +25,10 @@ func (s Ns) String() string {
 
 // NsRoot is the root namespace.
 const NsRoot = Ns("root")
+
+// Deprecated: the token namespace was removed from check with #243 Phase 2.
+// Tokens are now resolved to a principal via am.SessionService (WithSessionConn)
+// before any check RPC; this constant no longer names a live namespace.
 const NsToken = Ns("token")
 const NsPersonal = Ns("personal")
 const NsServiceAccount = Ns("serviceaccount")
@@ -114,19 +118,23 @@ func TimestampEpoch() Timestamp {
 // Client is a client for the check service.
 type Client struct {
 	// TODO prefix is a web concern only - should not be part of client
-	prefix       string
-	grpcClient   proto.CheckServiceClient
-	observeCheck func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)
-	observeList  func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)
+	prefix          string
+	grpcClient      proto.CheckServiceClient
+	sessionResolver *cachedResolver
+	observeCheck    func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)
+	observeList     func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)
 }
 
-// New creates a new client.
+// New creates a new client for direct check/list/write RPCs. To serve web
+// requests through Wrap, also configure the session channel with
+// WithSessionConn so opaque session tokens can be resolved to a principal.
 func New(conn *grpc.ClientConn) *Client {
 	return &Client{
 		prefix:     "",
 		grpcClient: proto.NewCheckServiceClient(conn),
 	}
 }
+
 func NewWithPrefix(conn *grpc.ClientConn, prefix string) *Client {
 	if prefix == "/" {
 		prefix = ""
@@ -139,6 +147,37 @@ func NewWithPrefix(conn *grpc.ClientConn, prefix string) *Client {
 
 func (c *Client) Prefix() string {
 	return c.prefix
+}
+
+// WithSessionConn configures token -> principal resolution over am.SessionService
+// (issue #243/#245). Required to serve web requests through Wrap: the middleware
+// hashes the cookie token in-process (sha256, hex — the raw token never leaves
+// the process) and resolves it to a principal UUID before any check RPC. The
+// relying party supplies a connected channel (mTLS to NIO_SESSION_URI); see
+// DialSessionFromEnv.
+func (c *Client) WithSessionConn(sessionConn *grpc.ClientConn) *Client {
+	c.sessionResolver = newSessionResolver(sessionConn)
+	return c
+}
+
+// ResolveToken hashes an opaque session token in-process (sha256, hex — the raw
+// token never leaves the process) and resolves it to the principal UserId to
+// pass to check. found=false with a nil error means the token is
+// unknown/expired/revoked; the caller redirects to signin without any check RPC.
+// It errors if no session channel was configured (see WithSessionConn) — there
+// is no raw-token fallback.
+func (c *Client) ResolveToken(_ context.Context, token string) (userId UserId, found bool, err error) {
+	if c.sessionResolver == nil {
+		return "", false, errors.New("nioclient: session resolver not configured (call WithSessionConn)")
+	}
+	session, err := c.sessionResolver.resolve(TokenHash(token))
+	if err != nil {
+		return "", false, fmt.Errorf("resolve session: %w", err)
+	}
+	if session == nil {
+		return "", false, nil
+	}
+	return UserId(session.Principal), true, nil
 }
 
 // WithObserveCheck sets the observe function for checks.

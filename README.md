@@ -17,7 +17,45 @@ Run
 
 to update the protobuf generated files.
 
-The original proto file is located at [https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/iam.proto](https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/iam.proto)
+The original proto files are located at
+
+- [https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/iam.proto](https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/iam.proto)
+- [https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/sessions.proto](https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/sessions.proto)
+
+Both are pinned byte-for-byte against upstream by the `check_proto.yml` workflow.
+
+# Session resolution
+
+Opaque session tokens are resolved to a principal via `am.SessionService` on
+nio-client (issue #243/#245). The check and session channels are both required
+by the constructor; the middleware hashes the cookie token (`sha256`, hex — the
+raw token never leaves the process), resolves it, and sends the resolved
+principal UUID to `check`. An unknown/expired/revoked token redirects to signin
+with zero check RPCs.
+
+    sessionConn, err := nioclient.DialSessionFromEnv() // NIO_SESSION_URI + SESSION_GRPC_TLS_*
+    if err != nil {
+        log.Fatalf("session channel: %v", err)
+    }
+    nioClient := nioclient.New(checkConn, sessionConn)
+
+Resolver tunables (env): `SESSION_L1_CAPACITY` (10000), `SESSION_L1_TTL`
+seconds (30), `SESSION_NEG_TTL` seconds (2), `SESSION_STALE_IF_ERROR` seconds
+(0 = off).
+
+# Request-scoped check memoization (prototype)
+
+Pass `WithRequestMemo()` to `Wrap` to memoize check decisions for the lifetime
+of a single request — a page running many `HasRel` calls for the same
+subject/object collapses to far fewer check RPCs:
+
+    router.GET(route, nioclient.Wrap(nioClient, extract, handler, nioclient.WithRequestMemo()))
+
+This is free of staleness risk (a request is one logical instant) but is
+**opt-in per route**: do not enable it on a handler that writes a tuple and then
+re-checks expecting to observe its own write. See
+[docs/request-memo-impl.md](docs/request-memo-impl.md) for the full design and
+the production TODO (List memoization, per-request singleflight, metrics).
 
 # License
 

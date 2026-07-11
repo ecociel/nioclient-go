@@ -62,7 +62,15 @@ func main() {
 		log.Fatalf("connect check-service at %q: %v", checkHostPort, err)
 	}
 
-	nioClient := nioclient.New(conn)
+	// am.SessionService channel: resolves opaque session tokens to a principal
+	// (NIO_SESSION_URI + SESSION_GRPC_TLS_*). Required to serve web requests.
+	// See issue #243/#245.
+	sessionConn, err := nioclient.DialSessionFromEnv()
+	if err != nil {
+		log.Fatalf("dial session-service: %v", err)
+	}
+
+	nioClient := nioclient.New(conn).WithSessionConn(sessionConn)
 
 	router := httprouter.New()
 

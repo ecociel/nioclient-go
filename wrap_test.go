@@ -1,0 +1,222 @@
+package nioclient
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/julienschmidt/httprouter"
+)
+
+// resolvingWrapper implements the Wrapper contract for the middleware tests.
+type resolvingWrapper struct {
+	prefix           string
+	resolvePrincipal string // "" => not_found
+	resolveErr       error
+	checkCalls       int
+	lastCheckUserId  UserId
+}
+
+func (w *resolvingWrapper) Prefix() string { return w.prefix }
+
+func (w *resolvingWrapper) ResolveToken(_ context.Context, _ string) (UserId, bool, error) {
+	if w.resolveErr != nil {
+		return "", false, w.resolveErr
+	}
+	if w.resolvePrincipal == "" {
+		return "", false, nil
+	}
+	return UserId(w.resolvePrincipal), true, nil
+}
+
+func (w *resolvingWrapper) Check(_ context.Context, _ Ns, _ Obj, _ Rel, userId UserId) (Principal, bool, error) {
+	w.checkCalls++
+	w.lastCheckUserId = userId
+	return Principal(userId), true, nil
+}
+
+func (w *resolvingWrapper) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, _ Timestamp) (Principal, bool, error) {
+	return w.Check(ctx, ns, obj, rel, userId)
+}
+
+func (w *resolvingWrapper) List(_ context.Context, _ Ns, _ Rel, _ UserId) ([]string, error) {
+	return nil, nil
+}
+
+type testResource struct{}
+
+func (testResource) Requires(_ string) (Ns, Obj, Rel) {
+	return Ns("article"), Obj("1"), Rel("article.get")
+}
+
+type testPublicResource struct{}
+
+func (testPublicResource) Requires(_ string) (Ns, Obj, Rel) {
+	return Ns("article"), Obj("1"), Rel("article.get")
+}
+func (testPublicResource) publicResource() {}
+
+func extractTest(_ http.ResponseWriter, _ *http.Request, _ httprouter.Params) (Resource, error) {
+	return testResource{}, nil
+}
+
+func extractPublicTest(_ http.ResponseWriter, _ *http.Request, _ httprouter.Params) (Resource, error) {
+	return testPublicResource{}, nil
+}
+
+func okHandler(w http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, u User) error {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok:" + u.Principal()))
+	return nil
+}
+
+func requestWithSession(token string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/articles/1", nil)
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "session", Value: token})
+	}
+	return req
+}
+
+func TestWrapResolvedTokenChecksPrincipal(t *testing.T) {
+	w := &resolvingWrapper{resolvePrincipal: "PRINCIPAL-UUID"}
+	h := Wrap(w, extractTest, okHandler)
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("raw-token"), nil)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if w.checkCalls != 1 {
+		t.Fatalf("checkCalls = %d, want 1", w.checkCalls)
+	}
+	if w.lastCheckUserId != UserId("PRINCIPAL-UUID") {
+		t.Fatalf("check subject = %q, want the resolved principal", w.lastCheckUserId)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "PRINCIPAL-UUID") {
+		t.Fatalf("body = %q, want resolved principal", body)
+	}
+}
+
+func TestWrapNotFoundRedirectsWithoutCheck(t *testing.T) {
+	w := &resolvingWrapper{prefix: "/app", resolvePrincipal: ""} // not_found
+	h := Wrap(w, extractTest, okHandler)
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("raw-token"), nil)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); !strings.HasPrefix(loc, "/app/signin?back=") {
+		t.Fatalf("Location = %q, want /app/signin redirect", loc)
+	}
+	if w.checkCalls != 0 {
+		t.Fatalf("checkCalls = %d, want 0 on not_found", w.checkCalls)
+	}
+}
+
+func TestWrapResolveErrorReturns500WithoutCheck(t *testing.T) {
+	w := &resolvingWrapper{resolveErr: errors.New("backend down")}
+	h := Wrap(w, extractTest, okHandler)
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("raw-token"), nil)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rr.Code)
+	}
+	if w.checkCalls != 0 {
+		t.Fatalf("checkCalls = %d, want 0 on resolve error", w.checkCalls)
+	}
+}
+
+func TestClientResolveTokenRequiresSessionConn(t *testing.T) {
+	// A client with no session channel configured must hard-fail on resolve —
+	// there is no raw-token fallback.
+	c := &Client{}
+	if _, _, err := c.ResolveToken(context.Background(), "raw-token"); err == nil {
+		t.Fatal("expected an error when no session resolver is configured")
+	}
+}
+
+// memoProbeHandler runs the gate rel again (memo hit) plus a second rel twice.
+func memoProbeHandler(w http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, u User) error {
+	_, _ = u.HasRel("article.get")  // same as the route's gate rel -> memo hit
+	_, _ = u.HasRel("article.edit") // new key -> 1 underlying check
+	_, _ = u.HasRel("article.edit") // memo hit
+	w.WriteHeader(http.StatusOK)
+	return nil
+}
+
+func TestWrapRequestMemoDedupesChecks(t *testing.T) {
+	w := &resolvingWrapper{resolvePrincipal: "P"}
+	h := Wrap(w, extractTest, memoProbeHandler, WithRequestMemo())
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("tok"), nil)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	// gate(article.get) + article.edit = 2; the repeats are served from the memo.
+	if w.checkCalls != 2 {
+		t.Fatalf("with memo: checkCalls = %d, want 2", w.checkCalls)
+	}
+}
+
+func TestWrapWithoutMemoRepeatsChecks(t *testing.T) {
+	w := &resolvingWrapper{resolvePrincipal: "P"}
+	h := Wrap(w, extractTest, memoProbeHandler) // no WithRequestMemo
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("tok"), nil)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	// gate(get) + get + edit + edit = 4: every check hits the wrapper.
+	if w.checkCalls != 4 {
+		t.Fatalf("without memo: checkCalls = %d, want 4", w.checkCalls)
+	}
+}
+
+func TestCheckMemoDoesNotCacheErrors(t *testing.T) {
+	calls := 0
+	failing := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ UserId) (Principal, bool, error) {
+		calls++
+		return "", false, errors.New("boom")
+	}
+	m := newCheckMemo(failing)
+	if _, _, err := m.check(context.Background(), "a", "b", "c", "u"); err == nil {
+		t.Fatal("expected error")
+	}
+	if _, _, err := m.check(context.Background(), "a", "b", "c", "u"); err == nil {
+		t.Fatal("expected error")
+	}
+	if calls != 2 {
+		t.Fatalf("errors must not be cached: calls = %d, want 2", calls)
+	}
+}
+
+func TestWrapPublicResourceNoCookieRunsAnonymous(t *testing.T) {
+	w := &resolvingWrapper{}
+	h := Wrap(w, extractPublicTest, okHandler)
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession(""), nil) // no session cookie
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if w.checkCalls != 0 {
+		t.Fatalf("checkCalls = %d, want 0 for public resource", w.checkCalls)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, string(Anonymous)) {
+		t.Fatalf("body = %q, want anonymous principal", body)
+	}
+}

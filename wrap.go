@@ -103,6 +103,10 @@ type Meter interface {
 type Wrapper interface {
 	Meter
 	Prefix() string
+	// ResolveToken maps a raw session token to the principal UserId to pass to
+	// check. found=false with a nil error means the token is
+	// unknown/expired/revoked; Wrap then redirects to signin with zero check RPCs.
+	ResolveToken(ctx context.Context, token string) (userId UserId, found bool, err error)
 	Check(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error)
 	CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, ts Timestamp) (principal Principal, ok bool, err error)
 	List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error)
@@ -110,7 +114,11 @@ type Wrapper interface {
 
 const Impossible = Rel("impossible")
 
-func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, httprouter.Params) (Resource, error), hdl HandlerFunc) httprouter.Handle {
+func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, httprouter.Params) (Resource, error), hdl HandlerFunc, opts ...WrapOption) httprouter.Handle {
+	var cfg wrapConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	return httprouter.Handle(func(rw http.ResponseWriter, r *http.Request, p httprouter.Params) {
 
 		resource, err := extract(rw, r, p)
@@ -156,6 +164,23 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		}
 		token := sessionCookie.Value
 
+		// Resolve the opaque session token to a principal via am.SessionService
+		// (issue #243/#245) — the raw token never reaches check. An
+		// unknown/expired/revoked token redirects to signin with zero check RPCs.
+		userId, found, err := wrapper.ResolveToken(r.Context(), token)
+		if err != nil {
+			if errMsg := mapErrorAndRespond(fmt.Errorf("resolve: %w", err), rw, r); errMsg != "" {
+				log.Printf("%s %s: error=%s (resolve)", r.Method, r.RequestURI, errMsg)
+			}
+			return
+		}
+		if !found {
+			back := url.QueryEscape(r.RequestURI)
+			uri := fmt.Sprintf("%s/signin?back=%s", wrapper.Prefix(), back)
+			http.Redirect(rw, r, uri, http.StatusSeeOther)
+			return
+		}
+
 		// If we have a check-timestamp hint, overwrite the checkfunc
 		checkTimestampCookie, err := r.Cookie("check_ts")
 		if err == nil {
@@ -168,8 +193,13 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 			}
 		}
 
+		// Request-scoped memoization: dedupe identical checks within this request.
+		if cfg.requestMemo {
+			user.check = newCheckMemo(user.check).check
+		}
+
 		Observe(rw, r, func(w http.ResponseWriter) error {
-			principal, ok, err := user.check(r.Context(), ns, obj, rel, UserId(token))
+			principal, ok, err := user.check(r.Context(), ns, obj, rel, userId)
 			if err != nil {
 				return fmt.Errorf("check: %w", err)
 			}

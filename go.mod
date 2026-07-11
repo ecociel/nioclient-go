@@ -6,6 +6,7 @@ toolchain go1.24.5
 
 require (
 	github.com/julienschmidt/httprouter v1.3.0
+	golang.org/x/sync v0.17.0
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.10
 )
