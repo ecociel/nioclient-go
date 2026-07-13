@@ -1249,11 +1249,11 @@ func (x *Update) GetDeleted() bool {
 }
 
 type RelationMeta struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
-	Inherit       *string                `protobuf:"bytes,3,opt,name=inherit,proto3,oneof" json:"inherit,omitempty"`
-	Permissions   []string               `protobuf:"bytes,4,rep,name=permissions,proto3" json:"permissions,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A relation and the shape of its userset rewrite. `kind` is one of
+	// `this` | `computed` | `tuple_to` | `union`.
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Kind          string `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1300,20 +1300,6 @@ func (x *RelationMeta) GetKind() string {
 		return x.Kind
 	}
 	return ""
-}
-
-func (x *RelationMeta) GetInherit() string {
-	if x != nil && x.Inherit != nil {
-		return *x.Inherit
-	}
-	return ""
-}
-
-func (x *RelationMeta) GetPermissions() []string {
-	if x != nil {
-		return x.Permissions
-	}
-	return nil
 }
 
 type NamespaceMeta struct {
@@ -1762,14 +1748,10 @@ const file_iam_proto_rawDesc = "" +
 	".am.UpdateR\aupdates\"C\n" +
 	"\x06Update\x12\x1f\n" +
 	"\x05tuple\x18\x01 \x01(\v2\t.am.TupleR\x05tuple\x12\x18\n" +
-	"\adeleted\x18\x02 \x01(\bR\adeleted\"\x83\x01\n" +
+	"\adeleted\x18\x02 \x01(\bR\adeleted\"X\n" +
 	"\fRelationMeta\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1d\n" +
-	"\ainherit\x18\x03 \x01(\tH\x00R\ainherit\x88\x01\x01\x12 \n" +
-	"\vpermissions\x18\x04 \x03(\tR\vpermissionsB\n" +
-	"\n" +
-	"\b_inherit\"S\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kindJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\ainheritR\vpermissions\"S\n" +
 	"\rNamespaceMeta\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12.\n" +
 	"\trelations\x18\x02 \x03(\v2\x10.am.RelationMetaR\trelations\"K\n" +
@@ -1887,7 +1869,6 @@ func file_iam_proto_init() {
 	}
 	file_iam_proto_msgTypes[12].OneofWrappers = []any{}
 	file_iam_proto_msgTypes[14].OneofWrappers = []any{}
-	file_iam_proto_msgTypes[19].OneofWrappers = []any{}
 	file_iam_proto_msgTypes[22].OneofWrappers = []any{
 		(*TupleSet_TupleSpec_UserId)(nil),
 		(*TupleSet_TupleSpec_UserSet)(nil),
