@@ -1748,10 +1748,10 @@ const file_iam_proto_rawDesc = "" +
 	".am.UpdateR\aupdates\"C\n" +
 	"\x06Update\x12\x1f\n" +
 	"\x05tuple\x18\x01 \x01(\v2\t.am.TupleR\x05tuple\x12\x18\n" +
-	"\adeleted\x18\x02 \x01(\bR\adeleted\"X\n" +
+	"\adeleted\x18\x02 \x01(\bR\adeleted\"6\n" +
 	"\fRelationMeta\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04kind\x18\x02 \x01(\tR\x04kindJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\ainheritR\vpermissions\"S\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\"S\n" +
 	"\rNamespaceMeta\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12.\n" +
 	"\trelations\x18\x02 \x03(\v2\x10.am.RelationMetaR\trelations\"K\n" +

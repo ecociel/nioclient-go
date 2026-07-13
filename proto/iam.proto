@@ -181,10 +181,6 @@ message RelationMeta {
   // `this` | `computed` | `tuple_to` | `union`.
   string name = 1;
   string kind = 2;
-  // 3 was `inherit`, 4 was `permissions` — both dropped with the
-  // roles/permissions sugar. Do not reuse the tags.
-  reserved 3, 4;
-  reserved "inherit", "permissions";
 }
 
 message NamespaceMeta {
