@@ -186,7 +186,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		if err == nil {
 			checkTimestamp := Timestamp(checkTimestampCookie.Value)
 			if checkTimestampCookie.Value == "" {
-				checkTimestamp = TimestampEpoch()
+				checkTimestamp = TimestampEmpty
 			}
 			user.check = func(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
 				return wrapper.CheckWithTimestamp(ctx, ns, obj, rel, userId, checkTimestamp)

@@ -102,7 +102,8 @@ func (s Principal) IsAnonymous() bool {
 	return s == Anonymous
 }
 
-// Timestamp is a timestamp.
+// Timestamp is an opaque packed zookie (standard Base64 of
+// [epoch:u8][millis:u48 BE], 7 bytes). Store and echo only; do not invent.
 type Timestamp string
 
 // String returns the string representation of the timestamp.
@@ -110,9 +111,40 @@ func (s Timestamp) String() string {
 	return string(s)
 }
 
-// TimestampEpoch returns the epoch timestamp.
+// TimestampEmpty is the packed empty zookie (epoch=1, millis=0). Wire value
+// matches check's Timestamp::empty().pack() — Base64 of 01 00 00 00 00 00 00.
+// Use when no fresher-than constraint is required (server picks a snapshot).
+const TimestampEmpty = Timestamp("AQAAAAAAAA==")
+
+// TimestampEpoch returns the empty evaluation zookie. Prefer TimestampEmpty.
 func TimestampEpoch() Timestamp {
-	return Timestamp("1:0000000000000")
+	return TimestampEmpty
+}
+
+// ListResult is the outcome of List: the evaluation snapshot zookie and the
+// objects on which the subject holds the relation. Pass Ts to a subsequent
+// CheckWithTimestamp / ListWithTimestamp / Read for a consistent snapshot.
+type ListResult struct {
+	Ts   Timestamp
+	Objs []string
+}
+
+// ExpandResult is the outcome of Expand: the evaluation snapshot zookie, leaf
+// user ids, and unresolved usersets as (ns, obj, rel).
+type ExpandResult struct {
+	Ts       Timestamp
+	UserIds  []string
+	Usersets []UserSet
+}
+
+// Tuple is a relationship edge for Write (add or delete).
+// Exactly one of UserId or UserSet must be set (UserSet non-nil wins if both).
+type Tuple struct {
+	Ns      Ns
+	Obj     Obj
+	Rel     Rel
+	UserId  UserId  // set for a direct user subject; empty when using UserSet
+	UserSet *UserSet // set for a userset subject
 }
 
 // Client is a client for the check service.
@@ -196,30 +228,48 @@ func (c *Client) WithObserveList(f func(ns Ns, rel Rel, userId UserId, duration 
 	return c
 }
 
-// List lists the objects a user has rel to.
-// It returns a list of object IDs.
+// List lists the objects a user has rel to at any current snapshot.
+// Prefer ListResult when you need the evaluation zookie for chaining.
 func (c *Client) List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error) {
+	res, err := c.ListWithTimestamp(ctx, ns, rel, userId, TimestampEmpty)
+	if err != nil {
+		return nil, err
+	}
+	return res.Objs, nil
+}
+
+// ListResult lists objects and returns the evaluation snapshot zookie.
+func (c *Client) ListResult(ctx context.Context, ns Ns, rel Rel, userId UserId) (ListResult, error) {
+	return c.ListWithTimestamp(ctx, ns, rel, userId, TimestampEmpty)
+}
+
+// ListWithTimestamp lists objects evaluated at a snapshot at least as fresh as ts.
+// The returned Ts is the snapshot the server actually used.
+func (c *Client) ListWithTimestamp(ctx context.Context, ns Ns, rel Rel, userId UserId, ts Timestamp) (ListResult, error) {
 	begin := time.Now().UnixMilli()
 	list, err := c.grpcClient.List(ctx, &proto.ListRequest{
 		Ns:     string(ns),
 		Rel:    string(rel),
 		UserId: string(userId),
-		Ts:     TimestampEpoch().String(),
+		Ts:     string(ts),
 	})
 	elapsed := time.Now().UnixMilli() - begin
 	if c.observeList != nil {
 		c.observeList(ns, rel, userId, time.Duration(elapsed)*time.Millisecond, err != nil)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("list %s,%s,%s: %w", ns, rel, userId, err)
+		return ListResult{}, fmt.Errorf("list %s,%s,%s: %w", ns, rel, userId, err)
 	}
-	return list.Objs, nil
+	return ListResult{
+		Ts:   Timestamp(list.GetTs()),
+		Objs: list.GetObjs(),
+	}, nil
 }
 
 // Check checks if a user has a rel on an object.
 // It returns the principal that granted the rel, whether the check was successful, and an error.
 func (c *Client) Check(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
-	return c.CheckWithTimestamp(ctx, ns, obj, rel, userId, Timestamp("1:0000000000000"))
+	return c.CheckWithTimestamp(ctx, ns, obj, rel, userId, TimestampEmpty)
 }
 
 // CheckWithTimestamp checks if a user has a rel on an object at a specific timestamp.
@@ -289,30 +339,17 @@ func (c *Client) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel
 //	return subtle.ConstantTimeCompare(password, []byte(c.password)) == 1, nil
 //}
 
-//Ns:     string(ns),
-//Rel:    string(rel),
-//UserId: string(userId),
-
 // AddOneUserId adds a user to an object with a specific relation.
-func (c *Client) AddOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) error {
-	addTuple := proto.Tuple{
-		Ns:   string(ns),
-		Obj:  string(obj),
-		Rel:  string(rel),
-		User: &proto.Tuple_UserId{UserId: string(userId)},
-	}
-
-	_, err := c.grpcClient.Write(ctx, &proto.WriteRequest{
-		AddTuples: []*proto.Tuple{&addTuple},
-	})
-	if err != nil {
-		return fmt.Errorf("addOneUserId %s,%s,%s,%s: %w", ns, obj, rel, userId, err)
-	}
-	return nil
+// Returns the commit zookie for read-your-writes (pass to CheckWithTimestamp).
+func (c *Client) AddOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (Timestamp, error) {
+	return c.Write(ctx, []Tuple{{
+		Ns: ns, Obj: obj, Rel: rel, UserId: userId,
+	}}, nil, nil)
 }
 
-// AddParent adds an inheritance relationship using the quasi-stanard relation "parent.
-func (c *Client) AddParent(ctx context.Context, ns Ns, obj Obj, parentNs Ns, parentObj Obj) error {
+// AddParent adds an inheritance relationship using the quasi-standard relation "parent".
+// Returns the commit zookie for read-your-writes.
+func (c *Client) AddParent(ctx context.Context, ns Ns, obj Obj, parentNs Ns, parentObj Obj) (Timestamp, error) {
 	userSet := UserSet{
 		Ns:  parentNs,
 		Obj: parentObj,
@@ -321,23 +358,117 @@ func (c *Client) AddParent(ctx context.Context, ns Ns, obj Obj, parentNs Ns, par
 	return c.AddOneUserSet(ctx, ns, obj, RelParent, userSet)
 }
 
-func (c *Client) AddOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, userSet UserSet) error {
-	addTuple := proto.Tuple{
+// AddOneUserSet adds a userset subject on ⟨ns, obj, rel⟩.
+// Returns the commit zookie for read-your-writes.
+func (c *Client) AddOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, userSet UserSet) (Timestamp, error) {
+	us := userSet
+	return c.Write(ctx, []Tuple{{
+		Ns: ns, Obj: obj, Rel: rel, UserSet: &us,
+	}}, nil, nil)
+}
+
+// DeleteOneUserId deletes a user assignment on ⟨ns, obj, rel⟩.
+// Returns the commit zookie for read-your-writes.
+func (c *Client) DeleteOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (Timestamp, error) {
+	return c.Write(ctx, nil, []Tuple{{
+		Ns: ns, Obj: obj, Rel: rel, UserId: userId,
+	}}, nil)
+}
+
+// DeleteOneUserSet deletes a userset assignment on ⟨ns, obj, rel⟩.
+// Returns the commit zookie for read-your-writes.
+func (c *Client) DeleteOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, userSet UserSet) (Timestamp, error) {
+	us := userSet
+	return c.Write(ctx, nil, []Tuple{{
+		Ns: ns, Obj: obj, Rel: rel, UserSet: &us,
+	}}, nil)
+}
+
+// Write commits add and del tuples atomically. precondition is an optional OCC
+// zookie (WriteRequest.ts); pass nil for an unconditional write. Returns the
+// commit zookie for read-your-writes / chaining subsequent reads.
+func (c *Client) Write(ctx context.Context, add, del []Tuple, precondition *Timestamp) (Timestamp, error) {
+	req := &proto.WriteRequest{
+		AddTuples: make([]*proto.Tuple, 0, len(add)),
+		DelTuples: make([]*proto.Tuple, 0, len(del)),
+	}
+	for i := range add {
+		pt, err := tupleToProto(&add[i])
+		if err != nil {
+			return "", fmt.Errorf("write add[%d]: %w", i, err)
+		}
+		req.AddTuples = append(req.AddTuples, pt)
+	}
+	for i := range del {
+		pt, err := tupleToProto(&del[i])
+		if err != nil {
+			return "", fmt.Errorf("write del[%d]: %w", i, err)
+		}
+		req.DelTuples = append(req.DelTuples, pt)
+	}
+	if precondition != nil {
+		ts := string(*precondition)
+		req.Ts = &ts
+	}
+
+	res, err := c.grpcClient.Write(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("write: %w", err)
+	}
+	return Timestamp(res.GetTs()), nil
+}
+
+// Expand returns the effective userset of ⟨ns, obj, rel⟩ (rewrite rules applied).
+func (c *Client) Expand(ctx context.Context, ns Ns, obj Obj, rel Rel) (ExpandResult, error) {
+	return c.ExpandWithTimestamp(ctx, ns, obj, rel, TimestampEmpty)
+}
+
+// ExpandWithTimestamp expands at a snapshot at least as fresh as ts.
+func (c *Client) ExpandWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, ts Timestamp) (ExpandResult, error) {
+	res, err := c.grpcClient.Expand(ctx, &proto.ExpandRequest{
 		Ns:  string(ns),
 		Obj: string(obj),
 		Rel: string(rel),
-		User: &proto.Tuple_UserSet{UserSet: &proto.UserSet{
-			Ns:  string(userSet.Ns),
-			Obj: string(userSet.Obj),
-			Rel: string(userSet.Rel),
-		}},
-	}
-
-	_, err := c.grpcClient.Write(ctx, &proto.WriteRequest{
-		AddTuples: []*proto.Tuple{&addTuple},
+		Ts:  string(ts),
 	})
 	if err != nil {
-		return fmt.Errorf("addOneUserSet %s,%s,%s,%s: %w", ns, obj, rel, userSet, err)
+		return ExpandResult{}, fmt.Errorf("expand %s,%s,%s: %w", ns, obj, rel, err)
 	}
-	return nil
+	usersets := make([]UserSet, 0, len(res.GetUsersets()))
+	for _, us := range res.GetUsersets() {
+		usersets = append(usersets, UserSet{
+			Ns:  Ns(us.GetNs()),
+			Obj: Obj(us.GetObj()),
+			Rel: Rel(us.GetRel()),
+		})
+	}
+	return ExpandResult{
+		Ts:       Timestamp(res.GetTs()),
+		UserIds:  res.GetUserIds(),
+		Usersets: usersets,
+	}, nil
+}
+
+func tupleToProto(t *Tuple) (*proto.Tuple, error) {
+	if t == nil {
+		return nil, errors.New("nil tuple")
+	}
+	pt := &proto.Tuple{
+		Ns:  string(t.Ns),
+		Obj: string(t.Obj),
+		Rel: string(t.Rel),
+	}
+	if t.UserSet != nil {
+		pt.User = &proto.Tuple_UserSet{UserSet: &proto.UserSet{
+			Ns:  string(t.UserSet.Ns),
+			Obj: string(t.UserSet.Obj),
+			Rel: string(t.UserSet.Rel),
+		}}
+		return pt, nil
+	}
+	if t.UserId != "" {
+		pt.User = &proto.Tuple_UserId{UserId: string(t.UserId)}
+		return pt, nil
+	}
+	return nil, errors.New("tuple subject required (UserId or UserSet)")
 }

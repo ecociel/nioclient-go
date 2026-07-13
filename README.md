@@ -17,12 +17,14 @@ Run
 
 to update the protobuf generated files.
 
-The original proto files are located at
+The original proto files track the nio server:
 
-- [https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/iam.proto](https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/iam.proto)
-- [https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/sessions.proto](https://raw.githubusercontent.com/ecociel/nio-client/refs/heads/main/proto/sessions.proto)
+- [nio/proto/iam.proto](https://github.com/ecociel/nio/blob/main/proto/iam.proto) (authorization: check, list, expand, write, watch, …)
+- [nio-client sessions](https://github.com/ecociel/nio-client/blob/main/proto/sessions.proto) (session resolve)
 
-Both are pinned byte-for-byte against upstream by the `check_proto.yml` workflow.
+`proto/iam.proto` should match the nio server you deploy against so wire fields
+(e.g. `ListResponse.ts`, packed write zookies) are visible to this client.
+`sessions.proto` remains pinned by the `check_proto.yml` workflow where applicable.
 
 # Session resolution
 
@@ -42,6 +44,25 @@ with zero check RPCs.
 Resolver tunables (env): `SESSION_L1_CAPACITY` (10000), `SESSION_L1_TTL`
 seconds (30), `SESSION_NEG_TTL` seconds (2), `SESSION_STALE_IF_ERROR` seconds
 (0 = off).
+
+# Zookies (timestamps)
+
+Check/list/write use **opaque packed zookies** (standard Base64 of 7 bytes:
+`[epoch:u8][millis:u48 BE]`). Treat them as opaque: store and echo only.
+
+- `TimestampEmpty` (`AQAAAAAAAA==`) — no fresher-than constraint; server picks a snapshot
+- Write helpers (`AddOneUserId`, `AddOneUserSet`, `DeleteOne*`, `Write`) return the **commit** zookie
+- `ListResult` / `ListWithTimestamp` return the **evaluation** snapshot zookie
+- Pass a zookie into `CheckWithTimestamp` / `ListWithTimestamp` for read-your-writes
+
+```go
+ts, err := client.AddOneUserId(ctx, ns, obj, rel, userId)
+// ...
+principal, ok, err := client.CheckWithTimestamp(ctx, ns, obj, rel, userId, ts)
+```
+
+`Write(ctx, add, del, precondition)` supports atomic multi-tuple commits and an
+optional OCC precondition zookie (`nil` = unconditional).
 
 # Request-scoped check memoization
 

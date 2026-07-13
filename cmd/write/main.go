@@ -28,11 +28,10 @@ func main() {
 
 	c := nioclient.New(conn)
 
+	var ts nioclient.Timestamp
 	if strings.Contains(user, "#") {
 		a := strings.SplitN(user, ":", 2)
-		println(a)
 		b := strings.SplitN(a[1], "#", 2)
-		println(b)
 
 		userSet := nioclient.UserSet{
 			Ns:  nioclient.Ns(a[0]),
@@ -40,15 +39,14 @@ func main() {
 			Rel: nioclient.Rel(b[1]),
 		}
 		fmt.Printf("%v\n", userSet)
-		err = c.AddOneUserSet(context.Background(),
+		ts, err = c.AddOneUserSet(context.Background(),
 			nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), userSet)
 	} else {
-
-		err = c.AddOneUserId(context.Background(),
+		ts, err = c.AddOneUserId(context.Background(),
 			nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), nioclient.UserId(user))
 	}
 	if err != nil {
 		log.Fatalf("add-one: %v", err)
 	}
-
+	fmt.Printf("committed at ts=%s\n", ts)
 }

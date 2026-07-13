@@ -32,7 +32,7 @@ func main() {
 
 	c := nioclient.New(conn)
 
-	principal, ok, err := c.CheckWithTimestamp(context.Background(), nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), nioclient.UserId(userId), nioclient.Timestamp("1:0000000000000"))
+	principal, ok, err := c.CheckWithTimestamp(context.Background(), nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), nioclient.UserId(userId), nioclient.TimestampEmpty)
 	if err != nil {
 		log.Fatalf("Error: %s", err.Error())
 	}

@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+
 	nioclient "github.com/ecociel/nioclient-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"log"
-	"os"
 )
 
 func main() {
@@ -25,13 +26,12 @@ func main() {
 
 	c := nioclient.New(conn)
 
-	objs, err := c.List(context.Background(), nioclient.Ns(ns), nioclient.Rel(rel), nioclient.UserId(userId))
+	res, err := c.ListResult(context.Background(), nioclient.Ns(ns), nioclient.Rel(rel), nioclient.UserId(userId))
 	if err != nil {
 		log.Fatalf("list: %v", err)
 	}
-	fmt.Printf("Result: %d objects\n", len(objs))
-	for _, obj := range objs {
+	fmt.Printf("Result: %d objects at ts=%s\n", len(res.Objs), res.Ts)
+	for _, obj := range res.Objs {
 		fmt.Printf("%s\n", obj)
 	}
-
 }
