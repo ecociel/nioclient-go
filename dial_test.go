@@ -27,33 +27,15 @@ func TestDialCheckEmptyTarget(t *testing.T) {
 	}
 }
 
-func TestDialCheckFromEnvRequiresURI(t *testing.T) {
-	t.Setenv("NIO_CHECK_URI", "")
-	_, err := DialCheckFromEnv()
+func TestDialSessionEmptyTarget(t *testing.T) {
+	_, err := DialSession("", insecure.NewCredentials())
 	if err == nil {
-		t.Fatal("expected error when NIO_CHECK_URI unset")
+		t.Fatal("expected error for empty target")
 	}
 }
 
-func TestDialSessionFromEnvRequiresURI(t *testing.T) {
-	t.Setenv("NIO_SESSION_URI", "")
-	_, err := DialSessionFromEnv()
-	if err == nil {
-		t.Fatal("expected error when NIO_SESSION_URI unset")
-	}
-}
-
-func TestTransportCredsFromEnvInsecureWhenUnset(t *testing.T) {
-	for _, k := range []string{
-		"GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH",
-		"GRPC_TLS_CA_PATH", "GRPC_TLS_DOMAIN",
-	} {
-		t.Setenv(k, "")
-	}
-	creds, err := transportCredsFromEnv(
-		"GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH",
-		"GRPC_TLS_CA_PATH", "GRPC_TLS_DOMAIN",
-	)
+func TestLoadTLSCredentialsInsecureWhenEmpty(t *testing.T) {
+	creds, err := LoadTLSCredentials("", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,13 +49,8 @@ func TestTransportCredsFromEnvInsecureWhenUnset(t *testing.T) {
 	_ = conn.Close()
 }
 
-func TestTransportCredsFromEnvPartialPair(t *testing.T) {
-	t.Setenv("GRPC_TLS_CERT_PATH", "/tmp/only-cert.pem")
-	t.Setenv("GRPC_TLS_KEY_PATH", "")
-	_, err := transportCredsFromEnv(
-		"GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH",
-		"GRPC_TLS_CA_PATH", "GRPC_TLS_DOMAIN",
-	)
+func TestLoadTLSCredentialsPartialPair(t *testing.T) {
+	_, err := LoadTLSCredentials("/tmp/only-cert.pem", "", "", "")
 	if err == nil {
 		t.Fatal("expected error when only cert is set")
 	}
@@ -86,5 +63,22 @@ func TestDialCheckInsecureConstructs(t *testing.T) {
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDialSessionInsecureConstructs(t *testing.T) {
+	conn, err := DialSessionInsecure("localhost:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDefaultResolverConfig(t *testing.T) {
+	cfg := DefaultResolverConfig()
+	if cfg.Capacity != 10000 || cfg.L1TTL != 30*time.Second || cfg.NegTTL != 2*time.Second || cfg.StaleIfError != 0 {
+		t.Fatalf("DefaultResolverConfig = %+v", cfg)
 	}
 }

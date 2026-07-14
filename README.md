@@ -41,35 +41,41 @@ Roles that carry direct grants: `RelAdmin`, `RelEditor`, `RelViewer`. Public
 subject markers: `UserIdAllUsers`, `UserIdAuthenticatedUsers`. The pointer
 object/rel keyword is `"..."` (`ObjUnspecified` / `RelUnspecified`).
 
-# Dialing check and session
+# Construction
 
-All package dial helpers enable HTTP/2 keepalive (30s interval, 10s timeout,
-pings while idle) so idle connections survive L4 load-balancer eviction
-(nio #239).
+`check` and `nio-client` (session) are always separate TCP endpoints. The
+library does not read environment variables; the process supplies targets,
+credentials, and cache config.
 
 ```go
-checkConn, err := nioclient.DialCheckFromEnv() // NIO_CHECK_URI + GRPC_TLS_*
-// or: nioclient.DialCheckInsecure("localhost:50051")
-sessionConn, err := nioclient.DialSessionFromEnv() // NIO_SESSION_URI + SESSION_GRPC_TLS_*
-nioClient := nioclient.New(checkConn).WithSessionConn(sessionConn)
+// RPC-only (Check / List / Write / …) — check channel only
+checkConn, err := nioclient.DialCheck(checkTarget, checkCreds)
+client := nioclient.New(checkConn)
+
+// HTTP Wrap — both channels required
+sessionConn, err := nioclient.DialSession(sessionTarget, sessionCreds)
+client := nioclient.NewWithSession(checkConn, sessionConn,
+    nioclient.WithPrefix("/app"),
+    nioclient.WithResolverConfig(nioclient.ResolverConfig{
+        Capacity: 10000,
+        L1TTL:    30 * time.Second,
+        NegTTL:   2 * time.Second,
+    }),
+)
 ```
 
-Check TLS env: `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_CA_PATH`,
-`GRPC_TLS_DOMAIN`. Session TLS uses the distinct `SESSION_GRPC_TLS_*` set
-(separate CA). With neither cert nor key set the channel is insecure (dev only).
+Dial helpers enable HTTP/2 keepalive (30s / 10s / while idle — nio #239).
+`LoadTLSCredentials(cert, key, ca, serverName)` builds mTLS credentials from
+paths; empty cert+key yields insecure (dev only). `DefaultResolverConfig()` is
+used when `WithResolverConfig` is omitted.
 
 # Session resolution
 
-Opaque session tokens are resolved to a principal via `am.SessionService` on
-nio-client (issue #243/#245). Configure the session channel with
-`WithSessionConn`; the middleware hashes the cookie token (`sha256`, hex — the
-raw token never leaves the process), resolves it, and sends the resolved
-principal UUID to `check`. An unknown/expired/revoked token redirects to signin
-with zero check RPCs.
-
-Resolver tunables (env): `SESSION_L1_CAPACITY` (10000), `SESSION_L1_TTL`
-seconds (30), `SESSION_NEG_TTL` seconds (2), `SESSION_STALE_IF_ERROR` seconds
-(0 = off).
+Opaque session tokens are resolved via `am.SessionService` on nio-client
+(issue #243/#245) only when the client is built with `NewWithSession`. Wrap
+hashes the cookie token (`sha256`, hex — the raw token never leaves the
+process), resolves it, and sends the principal UUID to `check`. Unknown /
+expired / revoked tokens redirect to signin with zero check RPCs.
 
 # Zookies (timestamps)
 

@@ -279,7 +279,8 @@ func FilterByUserSet(ns Ns, us UserSet, rel *Rel) ReadFilter {
 	}}
 }
 
-// Client is a client for the check service.
+// Client is a client for the check service, optionally with session resolution
+// for HTTP Wrap (see New vs NewWithSession).
 type Client struct {
 	// TODO prefix is a web concern only - should not be part of client
 	prefix          string
@@ -290,25 +291,56 @@ type Client struct {
 	observeList     func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)
 }
 
-// New creates a new client for direct check/list/write RPCs. To serve web
-// requests through Wrap, also configure the session channel with
-// WithSessionConn so opaque session tokens can be resolved to a principal.
-func New(conn *grpc.ClientConn) *Client {
-	return &Client{
-		prefix:     "",
-		grpcClient: proto.NewCheckServiceClient(conn),
-		nsClient:   proto.NewNamespaceServiceClient(conn),
+// SessionOption configures NewWithSession (prefix, resolver cache tunables).
+type SessionOption func(*sessionOptions)
+
+type sessionOptions struct {
+	prefix string
+	cfg    ResolverConfig
+}
+
+// WithPrefix sets the URL prefix used by Wrap for sign-in redirects
+// (e.g. "/app" → "/app/signin?back=…"). A lone "/" is treated as empty.
+func WithPrefix(prefix string) SessionOption {
+	return func(o *sessionOptions) {
+		if prefix == "/" {
+			prefix = ""
+		}
+		o.prefix = prefix
 	}
 }
 
-func NewWithPrefix(conn *grpc.ClientConn, prefix string) *Client {
-	if prefix == "/" {
-		prefix = ""
+// WithResolverConfig sets session L1 cache tunables. Omitted → DefaultResolverConfig.
+func WithResolverConfig(cfg ResolverConfig) SessionOption {
+	return func(o *sessionOptions) {
+		o.cfg = cfg
+	}
+}
+
+// New creates an RPC-only client on the check gRPC connection (CheckService +
+// NamespaceService). Use for Check/List/Write/Read/Expand/Watch without cookie
+// session resolution. For HTTP Wrap, use NewWithSession.
+func New(checkConn *grpc.ClientConn) *Client {
+	return &Client{
+		grpcClient: proto.NewCheckServiceClient(checkConn),
+		nsClient:   proto.NewNamespaceServiceClient(checkConn),
+	}
+}
+
+// NewWithSession creates a client for HTTP Wrap: check RPCs on checkConn and
+// token→principal resolution on sessionConn (am.SessionService on nio-client).
+// The two connections are always distinct endpoints. Pass SessionOptions for
+// prefix and resolver cache config; defaults apply when omitted.
+func NewWithSession(checkConn, sessionConn *grpc.ClientConn, opts ...SessionOption) *Client {
+	o := sessionOptions{cfg: DefaultResolverConfig()}
+	for _, opt := range opts {
+		opt(&o)
 	}
 	return &Client{
-		prefix:     prefix,
-		grpcClient: proto.NewCheckServiceClient(conn),
-		nsClient:   proto.NewNamespaceServiceClient(conn),
+		prefix:          o.prefix,
+		grpcClient:      proto.NewCheckServiceClient(checkConn),
+		nsClient:        proto.NewNamespaceServiceClient(checkConn),
+		sessionResolver: newSessionResolver(sessionConn, o.cfg),
 	}
 }
 
@@ -316,26 +348,15 @@ func (c *Client) Prefix() string {
 	return c.prefix
 }
 
-// WithSessionConn configures token -> principal resolution over am.SessionService
-// (issue #243/#245). Required to serve web requests through Wrap: the middleware
-// hashes the cookie token in-process (sha256, hex — the raw token never leaves
-// the process) and resolves it to a principal UUID before any check RPC. The
-// relying party supplies a connected channel (mTLS to NIO_SESSION_URI); see
-// DialSessionFromEnv.
-func (c *Client) WithSessionConn(sessionConn *grpc.ClientConn) *Client {
-	c.sessionResolver = newSessionResolver(sessionConn)
-	return c
-}
-
 // ResolveToken hashes an opaque session token in-process (sha256, hex — the raw
 // token never leaves the process) and resolves it to the principal UserId to
 // pass to check. found=false with a nil error means the token is
 // unknown/expired/revoked; the caller redirects to signin without any check RPC.
-// It errors if no session channel was configured (see WithSessionConn) — there
-// is no raw-token fallback.
+// It errors if the client was built with New (RPC-only) rather than
+// NewWithSession — there is no raw-token fallback.
 func (c *Client) ResolveToken(_ context.Context, token string) (userId UserId, found bool, err error) {
 	if c.sessionResolver == nil {
-		return "", false, errors.New("nioclient: session resolver not configured (call WithSessionConn)")
+		return "", false, errors.New("nioclient: session resolver not configured (use NewWithSession)")
 	}
 	session, err := c.sessionResolver.resolve(TokenHash(token))
 	if err != nil {

@@ -138,12 +138,11 @@ func TestWrapResolveErrorReturns500WithoutCheck(t *testing.T) {
 	}
 }
 
-func TestClientResolveTokenRequiresSessionConn(t *testing.T) {
-	// A client with no session channel configured must hard-fail on resolve —
-	// there is no raw-token fallback.
+func TestClientResolveTokenRequiresNewWithSession(t *testing.T) {
+	// RPC-only clients have no session resolver — no raw-token fallback.
 	c := &Client{}
 	if _, _, err := c.ResolveToken(context.Background(), "raw-token"); err == nil {
-		t.Fatal("expected an error when no session resolver is configured")
+		t.Fatal("expected an error when built without session resolver")
 	}
 }
 

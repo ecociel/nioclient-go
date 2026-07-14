@@ -54,21 +54,18 @@ func getArticle(w http.ResponseWriter, r *http.Request, p httprouter.Params, res
 }
 
 func main() {
-	// Prefer DialCheckFromEnv (NIO_CHECK_URI + GRPC_TLS_*) in real deployments.
-	conn, err := nioclient.DialCheckInsecure("localhost:50051")
+	// Callers dial both services with explicit targets/credentials — no env
+	// reads inside the library. Production: DialCheck/DialSession + LoadTLSCredentials.
+	checkConn, err := nioclient.DialCheckInsecure("localhost:50051")
 	if err != nil {
 		log.Fatalf("connect check-service: %v", err)
 	}
-
-	// am.SessionService channel: resolves opaque session tokens to a principal
-	// (NIO_SESSION_URI + SESSION_GRPC_TLS_*). Required to serve web requests.
-	// See issue #243/#245.
-	sessionConn, err := nioclient.DialSessionFromEnv()
+	sessionConn, err := nioclient.DialSessionInsecure("localhost:50052")
 	if err != nil {
-		log.Fatalf("dial session-service: %v", err)
+		log.Fatalf("connect session-service: %v", err)
 	}
 
-	nioClient := nioclient.New(conn).WithSessionConn(sessionConn)
+	nioClient := nioclient.NewWithSession(checkConn, sessionConn)
 
 	router := httprouter.New()
 

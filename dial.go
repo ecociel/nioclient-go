@@ -2,6 +2,8 @@ package nioclient
 
 // gRPC dial helpers with HTTP/2 keepalive so idle connections survive L4
 // idle-eviction (IPVS, cloud LBs, NAT) — see nio issue #239 / check_client.
+// Callers supply target and credentials explicitly; this package does not
+// read environment variables for dial or TLS.
 
 import (
 	"crypto/tls"
@@ -50,60 +52,32 @@ func DialCheckInsecure(target string) (*grpc.ClientConn, error) {
 	return DialCheck(target, insecure.NewCredentials())
 }
 
-// DialCheckFromEnv dials am.CheckService from the relying-party env:
-// NIO_CHECK_URI (required — fail fast) plus GRPC_TLS_CERT_PATH / _KEY_PATH /
-// _CA_PATH / _DOMAIN. With no TLS cert/key configured the channel is insecure
-// (local dev only). Keepalive matches DialCheck (#239).
-func DialCheckFromEnv() (*grpc.ClientConn, error) {
-	uri := os.Getenv("NIO_CHECK_URI")
-	if uri == "" {
-		return nil, errors.New("NIO_CHECK_URI is not set")
+// DialSession dials am.SessionService (nio-client) with the same keepalive as
+// DialCheck. Pass nil creds for an insecure channel (local dev only).
+func DialSession(target string, creds credentials.TransportCredentials) (*grpc.ClientConn, error) {
+	if target == "" {
+		return nil, errors.New("session target is empty")
 	}
-	creds, err := transportCredsFromEnv(
-		"GRPC_TLS_CERT_PATH",
-		"GRPC_TLS_KEY_PATH",
-		"GRPC_TLS_CA_PATH",
-		"GRPC_TLS_DOMAIN",
-	)
-	if err != nil {
-		return nil, err
+	if creds == nil {
+		creds = insecure.NewCredentials()
 	}
-	return dial(uri, creds)
+	return dial(target, creds)
 }
 
-// DialSessionFromEnv dials am.SessionService from the relying-party env:
-// NIO_SESSION_URI (required — fail fast) plus the dedicated session-channel TLS
-// vars SESSION_GRPC_TLS_CERT_PATH / _KEY_PATH / _CA_PATH / _DOMAIN. These are a
-// distinct set from the check-channel GRPC_TLS_* vars (a different, dedicated
-// session CA). With no TLS cert/key configured the channel is insecure (local
-// dev only). Keepalive matches DialCheck (#239).
-func DialSessionFromEnv() (*grpc.ClientConn, error) {
-	uri := os.Getenv("NIO_SESSION_URI")
-	if uri == "" {
-		return nil, errors.New("NIO_SESSION_URI is not set")
-	}
-	creds, err := transportCredsFromEnv(
-		"SESSION_GRPC_TLS_CERT_PATH",
-		"SESSION_GRPC_TLS_KEY_PATH",
-		"SESSION_GRPC_TLS_CA_PATH",
-		"SESSION_GRPC_TLS_DOMAIN",
-	)
-	if err != nil {
-		return nil, err
-	}
-	return dial(uri, creds)
+// DialSessionInsecure dials session without TLS (local dev only).
+func DialSessionInsecure(target string) (*grpc.ClientConn, error) {
+	return DialSession(target, insecure.NewCredentials())
 }
 
-// transportCredsFromEnv builds mTLS credentials from named env vars.
-// With neither cert nor key set the channel is insecure (local dev only).
-func transportCredsFromEnv(certEnv, keyEnv, caEnv, domainEnv string) (credentials.TransportCredentials, error) {
-	certPath := os.Getenv(certEnv)
-	keyPath := os.Getenv(keyEnv)
+// LoadTLSCredentials builds mTLS credentials from filesystem paths.
+// With both certPath and keyPath empty, returns insecure credentials
+// (local dev only). caPath and serverName are optional when using a keypair.
+func LoadTLSCredentials(certPath, keyPath, caPath, serverName string) (credentials.TransportCredentials, error) {
 	if certPath == "" && keyPath == "" {
 		return insecure.NewCredentials(), nil
 	}
 	if certPath == "" || keyPath == "" {
-		return nil, fmt.Errorf("%s and %s must both be set or both unset", certEnv, keyEnv)
+		return nil, errors.New("cert and key paths must both be set or both empty")
 	}
 
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
@@ -114,7 +88,7 @@ func transportCredsFromEnv(certEnv, keyEnv, caEnv, domainEnv string) (credential
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
 	}
-	if caPath := os.Getenv(caEnv); caPath != "" {
+	if caPath != "" {
 		caPem, err := os.ReadFile(caPath)
 		if err != nil {
 			return nil, fmt.Errorf("read CA %q: %w", caPath, err)
@@ -125,8 +99,8 @@ func transportCredsFromEnv(certEnv, keyEnv, caEnv, domainEnv string) (credential
 		}
 		cfg.RootCAs = pool
 	}
-	if domain := os.Getenv(domainEnv); domain != "" {
-		cfg.ServerName = domain
+	if serverName != "" {
+		cfg.ServerName = serverName
 	}
 	return credentials.NewTLS(cfg), nil
 }

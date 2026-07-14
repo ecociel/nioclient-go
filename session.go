@@ -19,8 +19,6 @@ import (
 	"errors"
 	"log"
 	"math/rand"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -66,31 +64,25 @@ func classifyStatus(err error) error {
 	return &resolveError{transport: transport, err: err}
 }
 
-// ResolverConfig holds the SESSION_* tunables. Defaults per #243.
+// ResolverConfig holds session-resolution cache tunables (issue #243).
+// Pass to NewWithSession via WithResolverConfig; DefaultResolverConfig is used
+// when omitted.
 type ResolverConfig struct {
-	Capacity     int
-	L1TTL        time.Duration
-	NegTTL       time.Duration
-	StaleIfError time.Duration
+	Capacity     int           // L1 LRU capacity
+	L1TTL        time.Duration // positive entry TTL (hard staleness/revocation cap)
+	NegTTL       time.Duration // negative tombstone TTL for unknown tokens
+	StaleIfError time.Duration // serve stale on transport error; 0 = off
 }
 
-// ResolverConfigFromEnv reads the SESSION_* tunables, falling back to defaults.
-func ResolverConfigFromEnv() ResolverConfig {
+// DefaultResolverConfig returns the #243 defaults: capacity 10000, L1 TTL 30s,
+// neg TTL 2s, stale-if-error off.
+func DefaultResolverConfig() ResolverConfig {
 	return ResolverConfig{
-		Capacity:     envInt("SESSION_L1_CAPACITY", 10000),
-		L1TTL:        time.Duration(envInt("SESSION_L1_TTL", 30)) * time.Second,
-		NegTTL:       time.Duration(envInt("SESSION_NEG_TTL", 2)) * time.Second,
-		StaleIfError: time.Duration(envInt("SESSION_STALE_IF_ERROR", 0)) * time.Second,
+		Capacity:     10000,
+		L1TTL:        30 * time.Second,
+		NegTTL:       2 * time.Second,
+		StaleIfError: 0,
 	}
-}
-
-func envInt(key string, def int) int {
-	if v, ok := os.LookupEnv(key); ok {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return def
 }
 
 // sessionFetcher is the backend fill for a cache miss: the actual point read.
@@ -201,8 +193,7 @@ func newCachedResolver(fetcher sessionFetcher, cfg ResolverConfig) *cachedResolv
 	}
 }
 
-// effectiveTTL applies downward-only jitter U(0.8, 1.0): SESSION_L1_TTL is a
-// hard cap.
+// effectiveTTL applies downward-only jitter U(0.8, 1.0): L1TTL is a hard cap.
 func (r *cachedResolver) effectiveTTL() time.Duration {
 	jitter := 0.8 + 0.2*rand.Float64()
 	return time.Duration(float64(r.cfg.L1TTL) * jitter)
@@ -317,9 +308,9 @@ func (r *cachedResolver) evict(hash string) {
 
 // newSessionResolver builds the cache-tiered resolver over an am.SessionService
 // channel.
-func newSessionResolver(sessionConn *grpc.ClientConn) *cachedResolver {
+func newSessionResolver(sessionConn *grpc.ClientConn, cfg ResolverConfig) *cachedResolver {
 	fetcher := &grpcFetcher{client: proto.NewSessionServiceClient(sessionConn)}
-	return newCachedResolver(fetcher, ResolverConfigFromEnv())
+	return newCachedResolver(fetcher, cfg)
 }
 
 // grpcFetcher fills over am.SessionService (the relying-party fleet path).
