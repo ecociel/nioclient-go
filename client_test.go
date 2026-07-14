@@ -16,6 +16,43 @@ func TestTimestampEmptyIsPackedEmptyZookie(t *testing.T) {
 	}
 }
 
+// Domain constants must stay byte-identical to nio/domain (and check bootstrap).
+func TestDomainConstantsMatchNio(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"NsIam", string(NsIam), "iam"},
+		{"NsServiceAccount", string(NsServiceAccount), "serviceaccount"},
+		{"ObjRoot", string(ObjRoot), "root"},
+		{"ObjUnspecified", string(ObjUnspecified), "..."},
+		{"RelIs", string(RelIs), "is"},
+		{"RelUnspecified", string(RelUnspecified), "..."},
+		{"RelParent", string(RelParent), "parent"},
+		{"RelAdmin", string(RelAdmin), "admin"},
+		{"RelEditor", string(RelEditor), "editor"},
+		{"RelViewer", string(RelViewer), "viewer"},
+		{"RelIamGet", string(RelIamGet), "iam.get"},
+		{"RelIamUpdate", string(RelIamUpdate), "iam.update"},
+		{"RelIamDelete", string(RelIamDelete), "iam.delete"},
+		{"RelServiceAccountGet", string(RelServiceAccountGet), "serviceaccount.get"},
+		{"RelServiceAccountCreate", string(RelServiceAccountCreate), "serviceaccount.create"},
+		{"RelServiceAccountUpdate", string(RelServiceAccountUpdate), "serviceaccount.update"},
+		{"RelServiceAccountCreateToken", string(RelServiceAccountCreateToken), "serviceaccount.createToken"},
+		{"RelServiceAccountKeyCreate", string(RelServiceAccountKeyCreate), "serviceaccount.key.create"},
+		{"RelServiceAccountKeyGet", string(RelServiceAccountKeyGet), "serviceaccount.key.get"},
+		{"RelUserCreate", string(RelUserCreate), "user.create"},
+		{"UserIdAllUsers", string(UserIdAllUsers), "allUsers"},
+		{"UserIdAuthenticatedUsers", string(UserIdAuthenticatedUsers), "authenticatedUsers"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 func TestTupleToProtoUserId(t *testing.T) {
 	pt, err := tupleToProto(&Tuple{
 		Ns: "doc", Obj: "1", Rel: "viewer", UserId: "u1",

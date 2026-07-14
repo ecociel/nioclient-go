@@ -20,11 +20,26 @@ to update the protobuf generated files.
 The original proto files track the nio server:
 
 - [nio/proto/iam.proto](https://github.com/ecociel/nio/blob/main/proto/iam.proto) (authorization: check, list, expand, write, watch, …)
-- [nio-client sessions](https://github.com/ecociel/nio-client/blob/main/proto/sessions.proto) (session resolve)
+- [nio/proto/sessions.proto](https://github.com/ecociel/nio/blob/main/proto/sessions.proto) (session resolve)
 
-`proto/iam.proto` should match the nio server you deploy against so wire fields
-(e.g. `ListResponse.ts`, packed write zookies) are visible to this client.
-`sessions.proto` remains pinned by the `check_proto.yml` workflow where applicable.
+`proto/iam.proto` and `proto/sessions.proto` should match the nio server you
+deploy against so wire fields (e.g. `ListResponse.ts`, packed write zookies)
+are visible to this client.
+
+# Built-in namespaces and the admin gate
+
+Constants mirror nio's `domain` crate and check bootstrap. Built-in namespaces
+are `NsIam` (`iam`) and `NsServiceAccount` (`serviceaccount`) only.
+
+The singleton admin object is `iam:root` (`NsIam` + `ObjRoot`). Typical gate
+relations:
+
+- viewer path: `RelIamGet` (`iam.get`)
+- admin path: `RelIamUpdate` (`iam.update`), `RelServiceAccountCreate`
+
+Roles that carry direct grants: `RelAdmin`, `RelEditor`, `RelViewer`. Public
+subject markers: `UserIdAllUsers`, `UserIdAuthenticatedUsers`. The pointer
+object/rel keyword is `"..."` (`ObjUnspecified` / `RelUnspecified`).
 
 # Session resolution
 

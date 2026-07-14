@@ -23,15 +23,11 @@ func (s Ns) String() string {
 	return string(s)
 }
 
-// NsRoot is the root namespace.
-const NsRoot = Ns("root")
-
-// Deprecated: the token namespace was removed from check with #243 Phase 2.
-// Tokens are now resolved to a principal via am.SessionService (WithSessionConn)
-// before any check RPC; this constant no longer names a live namespace.
-const NsToken = Ns("token")
-const NsPersonal = Ns("personal")
-const NsServiceAccount = Ns("serviceaccount")
+// Built-in namespaces (nio domain / check bootstrap).
+const (
+	NsIam            = Ns("iam")
+	NsServiceAccount = Ns("serviceaccount")
+)
 
 // Obj is an object.
 type Obj string
@@ -42,9 +38,13 @@ func (s Obj) String() string {
 	return string(s)
 }
 
-// ObjRoot is the root object.
-const ObjRoot = Obj("root")
-const ObjUnspecified = Obj("unspecified")
+// Built-in objects (nio domain).
+// ObjRoot is the singleton object of the iam namespace: guards read iam:root#….
+// ObjUnspecified is the "..." pointer keyword used as a parent-link object.
+const (
+	ObjRoot        = Obj("root")
+	ObjUnspecified = Obj("...")
+)
 
 // Rel is a rel on an object.
 type Rel string
@@ -54,17 +54,31 @@ func (s Rel) String() string {
 	return string(s)
 }
 
-const RelIs = Rel("is")
-const RelUnspecified = Rel("...")
-const RelParent = Rel("parent")
-const RelRootGet = Rel("root.get")
-const RelServiceAccountGet = Rel("serviceaccount.get")
-const RelServiceAccountCreateToken = Rel("serviceaccount.createToken")
-const RelServiceAccountKeyCreate = Rel("serviceaccount.key.create")
-const RelServiceAccountKeyGet = Rel("serviceaccount.key.get")
-const RelIamGet = Rel("iam.get")
-const RelIamUpdate = Rel("iam.update")
-const RelUserCreate = Rel("user.create")
+// Built-in relations (nio domain / check bootstrap).
+// Roles (admin/editor/viewer) carry direct tuples; dotted names are computed
+// permissions. The admin gate triple is NsIam + ObjRoot + RelIamGet|RelIamUpdate.
+const (
+	RelIs          = Rel("is")
+	RelUnspecified = Rel("...")
+	RelParent      = Rel("parent")
+
+	RelAdmin  = Rel("admin")
+	RelEditor = Rel("editor")
+	RelViewer = Rel("viewer")
+
+	RelIamGet    = Rel("iam.get")
+	RelIamUpdate = Rel("iam.update")
+	RelIamDelete = Rel("iam.delete")
+
+	RelServiceAccountGet         = Rel("serviceaccount.get")
+	RelServiceAccountCreate      = Rel("serviceaccount.create")
+	RelServiceAccountUpdate      = Rel("serviceaccount.update")
+	RelServiceAccountCreateToken = Rel("serviceaccount.createToken")
+	RelServiceAccountKeyCreate   = Rel("serviceaccount.key.create")
+	RelServiceAccountKeyGet      = Rel("serviceaccount.key.get")
+
+	RelUserCreate = Rel("user.create")
+)
 
 // UserId is a user's ID.
 type UserId string
@@ -73,6 +87,12 @@ type UserId string
 func (s UserId) String() string {
 	return string(s)
 }
+
+// Public subject markers (nio domain UserId). Grantable like any other user id.
+const (
+	UserIdAllUsers           = UserId("allUsers")
+	UserIdAuthenticatedUsers = UserId("authenticatedUsers")
+)
 
 // UserSet is a set of users.
 type UserSet struct {
