@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	nioclient "github.com/ecociel/nioclient-go"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -18,12 +16,9 @@ func main() {
 	rel := os.Args[3]
 	user := os.Args[4]
 
-	hostport := "localhost:50052"
-
-	conn, err := grpc.NewClient(hostport, grpc.
-		WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := nioclient.DialCheckInsecure("localhost:50052")
 	if err != nil {
-		log.Fatalf("connect check-service at %q: %v", hostport, err)
+		log.Fatalf("connect check-service: %v", err)
 	}
 
 	c := nioclient.New(conn)

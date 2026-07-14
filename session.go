@@ -15,11 +15,8 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"log"
 	"math/rand"
 	"os"
@@ -31,8 +28,6 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -349,56 +344,4 @@ func (f *grpcFetcher) fetch(ctx context.Context, tokenHash string) (*ResolvedSes
 	}, nil
 }
 
-// DialSessionFromEnv dials am.SessionService from the relying-party env:
-// NIO_SESSION_URI (required — fail fast) plus the dedicated session-channel TLS
-// vars SESSION_GRPC_TLS_CERT_PATH / _KEY_PATH / _CA_PATH / _DOMAIN. These are a
-// distinct set from the check-channel GRPC_TLS_* vars (a different, dedicated
-// session CA). With no TLS cert/key configured the channel is insecure (local
-// dev only).
-func DialSessionFromEnv() (*grpc.ClientConn, error) {
-	uri := os.Getenv("NIO_SESSION_URI")
-	if uri == "" {
-		return nil, errors.New("NIO_SESSION_URI is not set")
-	}
 
-	creds, err := sessionTransportCreds()
-	if err != nil {
-		return nil, err
-	}
-	return grpc.NewClient(uri, grpc.WithTransportCredentials(creds))
-}
-
-// sessionTransportCreds builds mTLS credentials for the session channel from
-// the SESSION_GRPC_TLS_* env vars. With neither cert nor key set the channel is
-// insecure (local dev only).
-func sessionTransportCreds() (credentials.TransportCredentials, error) {
-	certPath := os.Getenv("SESSION_GRPC_TLS_CERT_PATH")
-	keyPath := os.Getenv("SESSION_GRPC_TLS_KEY_PATH")
-	if certPath == "" && keyPath == "" {
-		return insecure.NewCredentials(), nil
-	}
-
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("load session client keypair: %w", err)
-	}
-	cfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	}
-	if caPath := os.Getenv("SESSION_GRPC_TLS_CA_PATH"); caPath != "" {
-		caPem, err := os.ReadFile(caPath)
-		if err != nil {
-			return nil, fmt.Errorf("read session CA %q: %w", caPath, err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caPem) {
-			return nil, fmt.Errorf("session CA %q contained no certificates", caPath)
-		}
-		cfg.RootCAs = pool
-	}
-	if domain := os.Getenv("SESSION_GRPC_TLS_DOMAIN"); domain != "" {
-		cfg.ServerName = domain
-	}
-	return credentials.NewTLS(cfg), nil
-}

@@ -7,8 +7,6 @@ import (
 
 	nioclient "github.com/ecociel/nioclient-go"
 	"github.com/julienschmidt/httprouter"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // ArticleResource represents a single article, identified by its ID.
@@ -56,10 +54,10 @@ func getArticle(w http.ResponseWriter, r *http.Request, p httprouter.Params, res
 }
 
 func main() {
-	checkHostPort := "localhost:50051"
-	conn, err := grpc.NewClient(checkHostPort, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Prefer DialCheckFromEnv (NIO_CHECK_URI + GRPC_TLS_*) in real deployments.
+	conn, err := nioclient.DialCheckInsecure("localhost:50051")
 	if err != nil {
-		log.Fatalf("connect check-service at %q: %v", checkHostPort, err)
+		log.Fatalf("connect check-service: %v", err)
 	}
 
 	// am.SessionService channel: resolves opaque session tokens to a principal
