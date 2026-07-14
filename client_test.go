@@ -1,6 +1,7 @@
 package nioclient
 
 import (
+	"strings"
 	"testing"
 
 	proto "github.com/ecociel/nioclient-go/proto"
@@ -67,6 +68,112 @@ func TestTupleToProtoUserId(t *testing.T) {
 	if !ok || uid.UserId != "u1" {
 		t.Fatalf("user: %#v", pt.User)
 	}
+}
+
+func TestTupleFromProtoUserId(t *testing.T) {
+	got, err := tupleFromProto(&proto.Tuple{
+		Ns: "coll", Obj: "uk", Rel: "owner",
+		User: &proto.Tuple_UserId{UserId: "user-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ns != "coll" || got.Obj != "uk" || got.Rel != "owner" || got.UserId != "user-1" {
+		t.Fatalf("got %+v", got)
+	}
+	if got.UserSet != nil {
+		t.Fatalf("unexpected userset: %+v", got.UserSet)
+	}
+}
+
+func TestTupleFromProtoUserSet(t *testing.T) {
+	got, err := tupleFromProto(&proto.Tuple{
+		Ns: "coll", Obj: "uk", Rel: "viewer",
+		User: &proto.Tuple_UserSet{UserSet: &proto.UserSet{
+			Ns: "grp", Obj: "eng", Rel: "member",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UserSet == nil {
+		t.Fatal("expected userset")
+	}
+	if got.UserSet.Ns != "grp" || got.UserSet.Obj != "eng" || got.UserSet.Rel != "member" {
+		t.Fatalf("userset: %+v", got.UserSet)
+	}
+	if got.UserId != "" {
+		t.Fatalf("unexpected userid %q", got.UserId)
+	}
+}
+
+func TestTupleFromProtoMissingUser(t *testing.T) {
+	_, err := tupleFromProto(&proto.Tuple{
+		Ns: "coll", Obj: "uk", Rel: "owner",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing user")
+	}
+	if !containsAll(err.Error(), "missing user", "coll") {
+		t.Fatalf("error should name field and tuple: %v", err)
+	}
+}
+
+func TestFilterByObject(t *testing.T) {
+	f := FilterByObject("doc", "1", nil)
+	os := f.set.GetObjectSpec()
+	if os == nil {
+		t.Fatalf("expected object_spec, got %#v", f.set.Spec)
+	}
+	if f.set.Ns != "doc" || os.Obj != "1" || os.Rel != nil {
+		t.Fatalf("filter: ns=%q obj=%q rel=%v", f.set.Ns, os.Obj, os.Rel)
+	}
+
+	rel := RelViewer
+	f = FilterByObject("doc", "1", &rel)
+	os = f.set.GetObjectSpec()
+	if os == nil || os.GetRel() != "viewer" {
+		t.Fatalf("expected rel viewer, got %#v", os)
+	}
+}
+
+func TestFilterByUser(t *testing.T) {
+	f := FilterByUser("doc", "u1", nil)
+	us := f.set.GetUsersetSpec()
+	if us == nil {
+		t.Fatalf("expected userset_spec, got %#v", f.set.Spec)
+	}
+	if f.set.Ns != "doc" || us.GetUserId() != "u1" || us.Rel != nil {
+		t.Fatalf("filter: ns=%q user=%q rel=%v", f.set.Ns, us.GetUserId(), us.Rel)
+	}
+
+	rel := RelEditor
+	f = FilterByUser("doc", "u1", &rel)
+	us = f.set.GetUsersetSpec()
+	if us == nil || us.GetRel() != "editor" {
+		t.Fatalf("expected rel editor, got %#v", us)
+	}
+}
+
+func TestFilterByUserSet(t *testing.T) {
+	f := FilterByUserSet("doc", UserSet{Ns: "grp", Obj: "eng", Rel: "member"}, nil)
+	us := f.set.GetUsersetSpec()
+	if us == nil {
+		t.Fatalf("expected userset_spec, got %#v", f.set.Spec)
+	}
+	got := us.GetUserSet()
+	if got == nil || got.Ns != "grp" || got.Obj != "eng" || got.Rel != "member" {
+		t.Fatalf("userset: %+v", got)
+	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, p := range parts {
+		if !strings.Contains(s, p) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestTupleToProtoUserSet(t *testing.T) {

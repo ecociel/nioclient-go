@@ -157,14 +157,77 @@ type ExpandResult struct {
 	Usersets []UserSet
 }
 
-// Tuple is a relationship edge for Write (add or delete).
+// ReadResult is the outcome of Read: the evaluation snapshot zookie and the
+// raw stored tuples matching the filters. Rewrite rules are not applied — use
+// Expand for the effective userset.
+type ReadResult struct {
+	Ts     Timestamp
+	Tuples []Tuple
+}
+
+// Tuple is a relationship edge for Write (add or delete) and Read results.
 // Exactly one of UserId or UserSet must be set (UserSet non-nil wins if both).
 type Tuple struct {
 	Ns      Ns
 	Obj     Obj
 	Rel     Rel
-	UserId  UserId  // set for a direct user subject; empty when using UserSet
+	UserId  UserId   // set for a direct user subject; empty when using UserSet
 	UserSet *UserSet // set for a userset subject
+}
+
+// ReadFilter is one TupleSet for the Read API (paper §2.4.2 / §2.4.3).
+// Build with FilterByObject, FilterByUser, or FilterByUserSet.
+type ReadFilter struct {
+	set *proto.TupleSet
+}
+
+// FilterByObject reads stored tuples on ⟨ns, obj⟩. rel nil means all relations.
+func FilterByObject(ns Ns, obj Obj, rel *Rel) ReadFilter {
+	spec := &proto.TupleSet_ObjectSpec{Obj: string(obj)}
+	if rel != nil {
+		r := string(*rel)
+		spec.Rel = &r
+	}
+	return ReadFilter{set: &proto.TupleSet{
+		Ns:   string(ns),
+		Spec: &proto.TupleSet_ObjectSpec_{ObjectSpec: spec},
+	}}
+}
+
+// FilterByUser reverse-reads tuples in ns whose subject is userId
+// (paper §2.4.3 UserSetSpec). rel nil means all relations.
+func FilterByUser(ns Ns, userId UserId, rel *Rel) ReadFilter {
+	spec := &proto.TupleSet_UserSetSpec{
+		User: &proto.TupleSet_UserSetSpec_UserId{UserId: string(userId)},
+	}
+	if rel != nil {
+		r := string(*rel)
+		spec.Rel = &r
+	}
+	return ReadFilter{set: &proto.TupleSet{
+		Ns:   string(ns),
+		Spec: &proto.TupleSet_UsersetSpec{UsersetSpec: spec},
+	}}
+}
+
+// FilterByUserSet reverse-reads tuples in ns whose subject is the userset.
+// rel nil means all relations.
+func FilterByUserSet(ns Ns, us UserSet, rel *Rel) ReadFilter {
+	spec := &proto.TupleSet_UserSetSpec{
+		User: &proto.TupleSet_UserSetSpec_UserSet{UserSet: &proto.UserSet{
+			Ns:  string(us.Ns),
+			Obj: string(us.Obj),
+			Rel: string(us.Rel),
+		}},
+	}
+	if rel != nil {
+		r := string(*rel)
+		spec.Rel = &r
+	}
+	return ReadFilter{set: &proto.TupleSet{
+		Ns:   string(ns),
+		Spec: &proto.TupleSet_UsersetSpec{UsersetSpec: spec},
+	}}
 }
 
 // Client is a client for the check service.
@@ -469,6 +532,72 @@ func (c *Client) ExpandWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Re
 	}, nil
 }
 
+// GetAll returns every stored tuple on ⟨ns, obj⟩ (all relations).
+// Stored edges only — rewrites are not evaluated.
+func (c *Client) GetAll(ctx context.Context, ns Ns, obj Obj) (ReadResult, error) {
+	return c.Read(ctx, FilterByObject(ns, obj, nil))
+}
+
+// GetAllRel returns stored tuples on ⟨ns, obj, rel⟩.
+func (c *Client) GetAllRel(ctx context.Context, ns Ns, obj Obj, rel Rel) (ReadResult, error) {
+	return c.Read(ctx, FilterByObject(ns, obj, &rel))
+}
+
+// ReadByUser reverse-reads tuples in ns whose subject is userId.
+// rel nil means all relations. Answered via the reverse index — no rewrites.
+func (c *Client) ReadByUser(ctx context.Context, ns Ns, userId UserId, rel *Rel) (ReadResult, error) {
+	return c.Read(ctx, FilterByUser(ns, userId, rel))
+}
+
+// ReadByUserSet reverse-reads tuples in ns whose subject is the userset.
+// rel nil means all relations.
+func (c *Client) ReadByUserSet(ctx context.Context, ns Ns, us UserSet, rel *Rel) (ReadResult, error) {
+	return c.Read(ctx, FilterByUserSet(ns, us, rel))
+}
+
+// Read returns stored tuples matching filters at any current snapshot.
+func (c *Client) Read(ctx context.Context, filters ...ReadFilter) (ReadResult, error) {
+	return c.ReadWithTimestamp(ctx, TimestampEmpty, filters...)
+}
+
+// ReadWithTimestamp returns stored tuples matching filters at a snapshot at
+// least as fresh as ts. The returned Ts is the snapshot the server used.
+func (c *Client) ReadWithTimestamp(ctx context.Context, ts Timestamp, filters ...ReadFilter) (ReadResult, error) {
+	if len(filters) == 0 {
+		return ReadResult{}, errors.New("read: at least one filter required")
+	}
+	req := &proto.ReadRequest{
+		TupleSets: make([]*proto.TupleSet, 0, len(filters)),
+	}
+	if ts != TimestampEmpty {
+		s := string(ts)
+		req.Ts = &s
+	}
+	for i, f := range filters {
+		if f.set == nil {
+			return ReadResult{}, fmt.Errorf("read filter[%d]: empty filter", i)
+		}
+		req.TupleSets = append(req.TupleSets, f.set)
+	}
+
+	res, err := c.grpcClient.Read(ctx, req)
+	if err != nil {
+		return ReadResult{}, fmt.Errorf("read: %w", err)
+	}
+	tuples := make([]Tuple, 0, len(res.GetTuples()))
+	for i, pt := range res.GetTuples() {
+		t, err := tupleFromProto(pt)
+		if err != nil {
+			return ReadResult{}, fmt.Errorf("read tuple[%d]: %w", i, err)
+		}
+		tuples = append(tuples, t)
+	}
+	return ReadResult{
+		Ts:     Timestamp(res.GetTs()),
+		Tuples: tuples,
+	}, nil
+}
+
 func tupleToProto(t *Tuple) (*proto.Tuple, error) {
 	if t == nil {
 		return nil, errors.New("nil tuple")
@@ -491,4 +620,36 @@ func tupleToProto(t *Tuple) (*proto.Tuple, error) {
 		return pt, nil
 	}
 	return nil, errors.New("tuple subject required (UserId or UserSet)")
+}
+
+// tupleFromProto maps a wire tuple to the client model. Missing user is a
+// contract violation (NIO-003 / paper Read §2.4.2).
+func tupleFromProto(pt *proto.Tuple) (Tuple, error) {
+	if pt == nil {
+		return Tuple{}, errors.New("nil tuple")
+	}
+	t := Tuple{
+		Ns:  Ns(pt.GetNs()),
+		Obj: Obj(pt.GetObj()),
+		Rel: Rel(pt.GetRel()),
+	}
+	switch u := pt.GetUser().(type) {
+	case nil:
+		return Tuple{}, fmt.Errorf("tuple %s:%s#%s missing user field", t.Ns, t.Obj, t.Rel)
+	case *proto.Tuple_UserId:
+		t.UserId = UserId(u.UserId)
+	case *proto.Tuple_UserSet:
+		us := u.UserSet
+		if us == nil {
+			return Tuple{}, fmt.Errorf("tuple %s:%s#%s empty userset", t.Ns, t.Obj, t.Rel)
+		}
+		t.UserSet = &UserSet{
+			Ns:  Ns(us.GetNs()),
+			Obj: Obj(us.GetObj()),
+			Rel: Rel(us.GetRel()),
+		}
+	default:
+		return Tuple{}, fmt.Errorf("tuple %s:%s#%s unknown user type", t.Ns, t.Obj, t.Rel)
+	}
+	return t, nil
 }
