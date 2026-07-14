@@ -138,12 +138,11 @@ func TestWrapResolveErrorReturns500WithoutCheck(t *testing.T) {
 	}
 }
 
-func TestClientResolveTokenRequiresNewWithSession(t *testing.T) {
-	// RPC-only clients have no session resolver — no raw-token fallback.
-	c := &Client{}
-	if _, _, err := c.ResolveToken(context.Background(), "raw-token"); err == nil {
-		t.Fatal("expected an error when built without session resolver")
-	}
+func TestSessionClientImplementsWrapper(t *testing.T) {
+	// *SessionClient is the only package type that implements Wrapper.
+	// *Client deliberately does not (no ResolveToken / Prefix) — Wrap(New(...))
+	// is a compile error.
+	var _ Wrapper = (*SessionClient)(nil)
 }
 
 // memoProbeHandler runs the gate rel again (memo hit) plus a second rel twice.

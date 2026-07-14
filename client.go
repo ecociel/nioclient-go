@@ -279,17 +279,39 @@ func FilterByUserSet(ns Ns, us UserSet, rel *Rel) ReadFilter {
 	}}
 }
 
-// Client is a client for the check service, optionally with session resolution
-// for HTTP Wrap (see New vs NewWithSession).
-type Client struct {
-	// TODO prefix is a web concern only - should not be part of client
-	prefix          string
-	grpcClient      proto.CheckServiceClient
-	nsClient        proto.NamespaceServiceClient
-	sessionResolver *cachedResolver
-	observeCheck    func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)
-	observeList     func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)
+// checkAPI is the shared CheckService + NamespaceService surface. Embedded by
+// Client and SessionClient so both expose the same RPC methods.
+type checkAPI struct {
+	grpcClient   proto.CheckServiceClient
+	nsClient     proto.NamespaceServiceClient
+	observeCheck func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)
+	observeList  func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)
 }
+
+func newCheckAPI(checkConn *grpc.ClientConn) *checkAPI {
+	return &checkAPI{
+		grpcClient: proto.NewCheckServiceClient(checkConn),
+		nsClient:   proto.NewNamespaceServiceClient(checkConn),
+	}
+}
+
+// Client is an RPC-only check client (Check/List/Write/…). It has no session
+// resolution and does not implement Wrapper — pass it to Wrap is a compile error.
+// For HTTP middleware, use SessionClient via NewWithSession.
+type Client struct {
+	*checkAPI
+}
+
+// SessionClient is check plus am.SessionService resolution for HTTP Wrap.
+// It implements Wrapper. Always built with a non-nil session channel.
+type SessionClient struct {
+	*checkAPI
+	prefix          string
+	sessionResolver *cachedResolver
+}
+
+// Compile-time: only SessionClient satisfies Wrapper from this package.
+var _ Wrapper = (*SessionClient)(nil)
 
 // SessionOption configures NewWithSession (prefix, resolver cache tunables).
 type SessionOption func(*sessionOptions)
@@ -321,30 +343,26 @@ func WithResolverConfig(cfg ResolverConfig) SessionOption {
 // NamespaceService). Use for Check/List/Write/Read/Expand/Watch without cookie
 // session resolution. For HTTP Wrap, use NewWithSession.
 func New(checkConn *grpc.ClientConn) *Client {
-	return &Client{
-		grpcClient: proto.NewCheckServiceClient(checkConn),
-		nsClient:   proto.NewNamespaceServiceClient(checkConn),
-	}
+	return &Client{checkAPI: newCheckAPI(checkConn)}
 }
 
-// NewWithSession creates a client for HTTP Wrap: check RPCs on checkConn and
-// token→principal resolution on sessionConn (am.SessionService on nio-client).
+// NewWithSession creates a SessionClient for HTTP Wrap: check RPCs on checkConn
+// and token→principal resolution on sessionConn (am.SessionService on nio-client).
 // The two connections are always distinct endpoints. Pass SessionOptions for
 // prefix and resolver cache config; defaults apply when omitted.
-func NewWithSession(checkConn, sessionConn *grpc.ClientConn, opts ...SessionOption) *Client {
+func NewWithSession(checkConn, sessionConn *grpc.ClientConn, opts ...SessionOption) *SessionClient {
 	o := sessionOptions{cfg: DefaultResolverConfig()}
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return &Client{
+	return &SessionClient{
+		checkAPI:        newCheckAPI(checkConn),
 		prefix:          o.prefix,
-		grpcClient:      proto.NewCheckServiceClient(checkConn),
-		nsClient:        proto.NewNamespaceServiceClient(checkConn),
 		sessionResolver: newSessionResolver(sessionConn, o.cfg),
 	}
 }
 
-func (c *Client) Prefix() string {
+func (c *SessionClient) Prefix() string {
 	return c.prefix
 }
 
@@ -352,12 +370,8 @@ func (c *Client) Prefix() string {
 // token never leaves the process) and resolves it to the principal UserId to
 // pass to check. found=false with a nil error means the token is
 // unknown/expired/revoked; the caller redirects to signin without any check RPC.
-// It errors if the client was built with New (RPC-only) rather than
-// NewWithSession — there is no raw-token fallback.
-func (c *Client) ResolveToken(_ context.Context, token string) (userId UserId, found bool, err error) {
-	if c.sessionResolver == nil {
-		return "", false, errors.New("nioclient: session resolver not configured (use NewWithSession)")
-	}
+// Only SessionClient has this method — RPC-only *Client cannot call it.
+func (c *SessionClient) ResolveToken(_ context.Context, token string) (userId UserId, found bool, err error) {
 	session, err := c.sessionResolver.resolve(TokenHash(token))
 	if err != nil {
 		return "", false, fmt.Errorf("resolve session: %w", err)
@@ -368,25 +382,33 @@ func (c *Client) ResolveToken(_ context.Context, token string) (userId UserId, f
 	return UserId(session.Principal), true, nil
 }
 
-// WithObserveCheck sets the observe function for checks.
-// The observe function is called after each check.
-// It can be used to collect metrics about the checks.
+// WithObserveCheck sets the observe function for checks on an RPC-only client.
 func (c *Client) WithObserveCheck(f func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)) *Client {
 	c.observeCheck = f
 	return c
 }
 
-// WithObserveList sets the observe function for lists.
-// The observe function is called after each list.
-// It can be used to collect metrics about the lists.
+// WithObserveList sets the observe function for lists on an RPC-only client.
 func (c *Client) WithObserveList(f func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)) *Client {
+	c.observeList = f
+	return c
+}
+
+// WithObserveCheck sets the observe function for checks on a SessionClient.
+func (c *SessionClient) WithObserveCheck(f func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)) *SessionClient {
+	c.observeCheck = f
+	return c
+}
+
+// WithObserveList sets the observe function for lists on a SessionClient.
+func (c *SessionClient) WithObserveList(f func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)) *SessionClient {
 	c.observeList = f
 	return c
 }
 
 // List lists the objects a user has rel to at any current snapshot.
 // Prefer ListResult when you need the evaluation zookie for chaining.
-func (c *Client) List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error) {
+func (c *checkAPI) List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error) {
 	res, err := c.ListWithTimestamp(ctx, ns, rel, userId, TimestampEmpty)
 	if err != nil {
 		return nil, err
@@ -395,13 +417,13 @@ func (c *Client) List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]str
 }
 
 // ListResult lists objects and returns the evaluation snapshot zookie.
-func (c *Client) ListResult(ctx context.Context, ns Ns, rel Rel, userId UserId) (ListResult, error) {
+func (c *checkAPI) ListResult(ctx context.Context, ns Ns, rel Rel, userId UserId) (ListResult, error) {
 	return c.ListWithTimestamp(ctx, ns, rel, userId, TimestampEmpty)
 }
 
 // ListWithTimestamp lists objects evaluated at a snapshot at least as fresh as ts.
 // The returned Ts is the snapshot the server actually used.
-func (c *Client) ListWithTimestamp(ctx context.Context, ns Ns, rel Rel, userId UserId, ts Timestamp) (ListResult, error) {
+func (c *checkAPI) ListWithTimestamp(ctx context.Context, ns Ns, rel Rel, userId UserId, ts Timestamp) (ListResult, error) {
 	begin := time.Now().UnixMilli()
 	list, err := c.grpcClient.List(ctx, &proto.ListRequest{
 		Ns:     string(ns),
@@ -424,13 +446,13 @@ func (c *Client) ListWithTimestamp(ctx context.Context, ns Ns, rel Rel, userId U
 
 // Check checks if a user has a rel on an object.
 // It returns the principal that granted the rel, whether the check was successful, and an error.
-func (c *Client) Check(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
+func (c *checkAPI) Check(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
 	return c.CheckWithTimestamp(ctx, ns, obj, rel, userId, TimestampEmpty)
 }
 
 // CheckWithTimestamp checks if a user has a rel on an object at a specific timestamp.
 // It returns the principal that granted the rel, whether the check was successful, and an error.
-func (c *Client) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, ts Timestamp) (principal Principal, ok bool, err error) {
+func (c *checkAPI) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, ts Timestamp) (principal Principal, ok bool, err error) {
 	if rel == Impossible {
 		return "", false, nil
 	}
@@ -497,7 +519,7 @@ func (c *Client) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel
 
 // AddOneUserId adds a user to an object with a specific relation.
 // Returns the commit zookie for read-your-writes (pass to CheckWithTimestamp).
-func (c *Client) AddOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (Timestamp, error) {
+func (c *checkAPI) AddOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (Timestamp, error) {
 	return c.Write(ctx, []Tuple{{
 		Ns: ns, Obj: obj, Rel: rel, UserId: userId,
 	}}, nil, nil)
@@ -505,7 +527,7 @@ func (c *Client) AddOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, user
 
 // AddOneUserIdWithExpires adds a user assignment that expires at expires (UTC).
 // Returns the commit zookie for read-your-writes.
-func (c *Client) AddOneUserIdWithExpires(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, expires time.Time) (Timestamp, error) {
+func (c *checkAPI) AddOneUserIdWithExpires(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, expires time.Time) (Timestamp, error) {
 	exp := expires.UTC()
 	return c.Write(ctx, []Tuple{{
 		Ns: ns, Obj: obj, Rel: rel, UserId: userId, Expires: &exp,
@@ -514,7 +536,7 @@ func (c *Client) AddOneUserIdWithExpires(ctx context.Context, ns Ns, obj Obj, re
 
 // AddParent adds an inheritance relationship using the quasi-standard relation "parent".
 // Returns the commit zookie for read-your-writes.
-func (c *Client) AddParent(ctx context.Context, ns Ns, obj Obj, parentNs Ns, parentObj Obj) (Timestamp, error) {
+func (c *checkAPI) AddParent(ctx context.Context, ns Ns, obj Obj, parentNs Ns, parentObj Obj) (Timestamp, error) {
 	userSet := UserSet{
 		Ns:  parentNs,
 		Obj: parentObj,
@@ -525,7 +547,7 @@ func (c *Client) AddParent(ctx context.Context, ns Ns, obj Obj, parentNs Ns, par
 
 // AddOneUserSet adds a userset subject on ⟨ns, obj, rel⟩.
 // Returns the commit zookie for read-your-writes.
-func (c *Client) AddOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, userSet UserSet) (Timestamp, error) {
+func (c *checkAPI) AddOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, userSet UserSet) (Timestamp, error) {
 	us := userSet
 	return c.Write(ctx, []Tuple{{
 		Ns: ns, Obj: obj, Rel: rel, UserSet: &us,
@@ -534,7 +556,7 @@ func (c *Client) AddOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, use
 
 // DeleteOneUserId deletes a user assignment on ⟨ns, obj, rel⟩.
 // Returns the commit zookie for read-your-writes.
-func (c *Client) DeleteOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (Timestamp, error) {
+func (c *checkAPI) DeleteOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (Timestamp, error) {
 	return c.Write(ctx, nil, []Tuple{{
 		Ns: ns, Obj: obj, Rel: rel, UserId: userId,
 	}}, nil)
@@ -542,7 +564,7 @@ func (c *Client) DeleteOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, u
 
 // DeleteOneUserSet deletes a userset assignment on ⟨ns, obj, rel⟩.
 // Returns the commit zookie for read-your-writes.
-func (c *Client) DeleteOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, userSet UserSet) (Timestamp, error) {
+func (c *checkAPI) DeleteOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, userSet UserSet) (Timestamp, error) {
 	us := userSet
 	return c.Write(ctx, nil, []Tuple{{
 		Ns: ns, Obj: obj, Rel: rel, UserSet: &us,
@@ -552,7 +574,7 @@ func (c *Client) DeleteOneUserSet(ctx context.Context, ns Ns, obj Obj, rel Rel, 
 // Write commits add and del tuples atomically. precondition is an optional OCC
 // zookie (WriteRequest.ts); pass nil for an unconditional write. Returns the
 // commit zookie for read-your-writes / chaining subsequent reads.
-func (c *Client) Write(ctx context.Context, add, del []Tuple, precondition *Timestamp) (Timestamp, error) {
+func (c *checkAPI) Write(ctx context.Context, add, del []Tuple, precondition *Timestamp) (Timestamp, error) {
 	req := &proto.WriteRequest{
 		AddTuples: make([]*proto.Tuple, 0, len(add)),
 		DelTuples: make([]*proto.Tuple, 0, len(del)),
@@ -587,7 +609,7 @@ func (c *Client) Write(ctx context.Context, add, del []Tuple, precondition *Time
 // snapshot (never a client-supplied zookie). Returns the evaluation zookie to
 // store with the new content version. userId may be a principal UUID or a
 // userset string ns:obj#rel (same as Check).
-func (c *Client) ContentChangeCheck(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (ContentChangeCheckResult, error) {
+func (c *checkAPI) ContentChangeCheck(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (ContentChangeCheckResult, error) {
 	res, err := c.grpcClient.ContentChangeCheck(ctx, &proto.ContentChangeCheckRequest{
 		Ns:     string(ns),
 		Obj:    string(obj),
@@ -607,7 +629,7 @@ func (c *Client) ContentChangeCheck(ctx context.Context, ns Ns, obj Obj, rel Rel
 // paper §2.4.6). Only changes committed after startTs are delivered,
 // oldest-first, interleaved with heartbeats (empty Updates). Cancel ctx to
 // stop. Resume later by passing any previously received event's Ts as startTs.
-func (c *Client) Watch(ctx context.Context, ns Ns, startTs Timestamp) (*WatchStream, error) {
+func (c *checkAPI) Watch(ctx context.Context, ns Ns, startTs Timestamp) (*WatchStream, error) {
 	stream, err := c.grpcClient.Watch(ctx, &proto.WatchRequest{
 		Ns:      string(ns),
 		StartTs: string(startTs),
@@ -632,12 +654,12 @@ func (s *WatchStream) Recv() (WatchEvent, error) {
 }
 
 // Expand returns the effective userset of ⟨ns, obj, rel⟩ (rewrite rules applied).
-func (c *Client) Expand(ctx context.Context, ns Ns, obj Obj, rel Rel) (ExpandResult, error) {
+func (c *checkAPI) Expand(ctx context.Context, ns Ns, obj Obj, rel Rel) (ExpandResult, error) {
 	return c.ExpandWithTimestamp(ctx, ns, obj, rel, TimestampEmpty)
 }
 
 // ExpandWithTimestamp expands at a snapshot at least as fresh as ts.
-func (c *Client) ExpandWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, ts Timestamp) (ExpandResult, error) {
+func (c *checkAPI) ExpandWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, ts Timestamp) (ExpandResult, error) {
 	res, err := c.grpcClient.Expand(ctx, &proto.ExpandRequest{
 		Ns:  string(ns),
 		Obj: string(obj),
@@ -665,7 +687,7 @@ func (c *Client) ExpandWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Re
 // ListNamespaces returns the namespace configs the check server loaded:
 // per namespace the declared relations and the rewrite kind of each.
 // Schema metadata only — no tuples.
-func (c *Client) ListNamespaces(ctx context.Context) ([]NamespaceMeta, error) {
+func (c *checkAPI) ListNamespaces(ctx context.Context) ([]NamespaceMeta, error) {
 	res, err := c.nsClient.ListNamespaces(ctx, &emptypb.Empty{})
 	if err != nil {
 		return nil, fmt.Errorf("list namespaces: %w", err)
@@ -689,35 +711,35 @@ func (c *Client) ListNamespaces(ctx context.Context) ([]NamespaceMeta, error) {
 
 // GetAll returns every stored tuple on ⟨ns, obj⟩ (all relations).
 // Stored edges only — rewrites are not evaluated.
-func (c *Client) GetAll(ctx context.Context, ns Ns, obj Obj) (ReadResult, error) {
+func (c *checkAPI) GetAll(ctx context.Context, ns Ns, obj Obj) (ReadResult, error) {
 	return c.Read(ctx, FilterByObject(ns, obj, nil))
 }
 
 // GetAllRel returns stored tuples on ⟨ns, obj, rel⟩.
-func (c *Client) GetAllRel(ctx context.Context, ns Ns, obj Obj, rel Rel) (ReadResult, error) {
+func (c *checkAPI) GetAllRel(ctx context.Context, ns Ns, obj Obj, rel Rel) (ReadResult, error) {
 	return c.Read(ctx, FilterByObject(ns, obj, &rel))
 }
 
 // ReadByUser reverse-reads tuples in ns whose subject is userId.
 // rel nil means all relations. Answered via the reverse index — no rewrites.
-func (c *Client) ReadByUser(ctx context.Context, ns Ns, userId UserId, rel *Rel) (ReadResult, error) {
+func (c *checkAPI) ReadByUser(ctx context.Context, ns Ns, userId UserId, rel *Rel) (ReadResult, error) {
 	return c.Read(ctx, FilterByUser(ns, userId, rel))
 }
 
 // ReadByUserSet reverse-reads tuples in ns whose subject is the userset.
 // rel nil means all relations.
-func (c *Client) ReadByUserSet(ctx context.Context, ns Ns, us UserSet, rel *Rel) (ReadResult, error) {
+func (c *checkAPI) ReadByUserSet(ctx context.Context, ns Ns, us UserSet, rel *Rel) (ReadResult, error) {
 	return c.Read(ctx, FilterByUserSet(ns, us, rel))
 }
 
 // Read returns stored tuples matching filters at any current snapshot.
-func (c *Client) Read(ctx context.Context, filters ...ReadFilter) (ReadResult, error) {
+func (c *checkAPI) Read(ctx context.Context, filters ...ReadFilter) (ReadResult, error) {
 	return c.ReadWithTimestamp(ctx, TimestampEmpty, filters...)
 }
 
 // ReadWithTimestamp returns stored tuples matching filters at a snapshot at
 // least as fresh as ts. The returned Ts is the snapshot the server used.
-func (c *Client) ReadWithTimestamp(ctx context.Context, ts Timestamp, filters ...ReadFilter) (ReadResult, error) {
+func (c *checkAPI) ReadWithTimestamp(ctx context.Context, ts Timestamp, filters ...ReadFilter) (ReadResult, error) {
 	if len(filters) == 0 {
 		return ReadResult{}, errors.New("read: at least one filter required")
 	}

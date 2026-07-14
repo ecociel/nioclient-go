@@ -47,14 +47,21 @@ object/rel keyword is `"..."` (`ObjUnspecified` / `RelUnspecified`).
 library does not read environment variables; the process supplies targets,
 credentials, and cache config.
 
-```go
-// RPC-only (Check / List / Write / …) — check channel only
-checkConn, err := nioclient.DialCheck(checkTarget, checkCreds)
-client := nioclient.New(checkConn)
+Two client types keep misuse a **compile error**:
 
-// HTTP Wrap — both channels required
+| Type | Constructor | Use |
+|---|---|---|
+| `*Client` | `New(checkConn)` | RPC only (Check / List / Write / …) |
+| `*SessionClient` | `NewWithSession(check, session, opts…)` | RPC + session; implements `Wrapper` for `Wrap` |
+
+```go
+// RPC-only — cannot be passed to Wrap
+checkConn, err := nioclient.DialCheck(checkTarget, checkCreds)
+rpc := nioclient.New(checkConn)
+
+// HTTP Wrap — both channels; type is *SessionClient
 sessionConn, err := nioclient.DialSession(sessionTarget, sessionCreds)
-client := nioclient.NewWithSession(checkConn, sessionConn,
+web := nioclient.NewWithSession(checkConn, sessionConn,
     nioclient.WithPrefix("/app"),
     nioclient.WithResolverConfig(nioclient.ResolverConfig{
         Capacity: 10000,
@@ -62,6 +69,7 @@ client := nioclient.NewWithSession(checkConn, sessionConn,
         NegTTL:   2 * time.Second,
     }),
 )
+router.GET(route, nioclient.Wrap(web, extract, handler))
 ```
 
 Dial helpers enable HTTP/2 keepalive (30s / 10s / while idle — nio #239).
@@ -72,10 +80,10 @@ used when `WithResolverConfig` is omitted.
 # Session resolution
 
 Opaque session tokens are resolved via `am.SessionService` on nio-client
-(issue #243/#245) only when the client is built with `NewWithSession`. Wrap
-hashes the cookie token (`sha256`, hex — the raw token never leaves the
-process), resolves it, and sends the principal UUID to `check`. Unknown /
-expired / revoked tokens redirect to signin with zero check RPCs.
+(issue #243/#245) on `*SessionClient` only. Wrap hashes the cookie token
+(`sha256`, hex — the raw token never leaves the process), resolves it, and
+sends the principal UUID to `check`. Unknown / expired / revoked tokens
+redirect to signin with zero check RPCs.
 
 # Zookies (timestamps)
 
