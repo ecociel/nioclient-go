@@ -8,6 +8,7 @@ import (
 
 	proto "github.com/ecociel/nioclient-go/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var (
@@ -167,12 +168,27 @@ type ReadResult struct {
 
 // Tuple is a relationship edge for Write (add or delete) and Read results.
 // Exactly one of UserId or UserSet must be set (UserSet non-nil wins if both).
+// Expires, when non-nil, sets the tuple condition to that unix second (UTC).
 type Tuple struct {
 	Ns      Ns
 	Obj     Obj
 	Rel     Rel
-	UserId  UserId   // set for a direct user subject; empty when using UserSet
-	UserSet *UserSet // set for a userset subject
+	UserId  UserId     // set for a direct user subject; empty when using UserSet
+	UserSet *UserSet   // set for a userset subject
+	Expires *time.Time // optional absolute expiry; nil = no condition
+}
+
+// RelationMeta is schema metadata for one relation (name + rewrite kind).
+// kind is one of this | computed | tuple_to | union.
+type RelationMeta struct {
+	Name string
+	Kind string
+}
+
+// NamespaceMeta is schema metadata for one namespace loaded by check.
+type NamespaceMeta struct {
+	Name      string
+	Relations []RelationMeta
 }
 
 // ReadFilter is one TupleSet for the Read API (paper §2.4.2 / §2.4.3).
@@ -235,6 +251,7 @@ type Client struct {
 	// TODO prefix is a web concern only - should not be part of client
 	prefix          string
 	grpcClient      proto.CheckServiceClient
+	nsClient        proto.NamespaceServiceClient
 	sessionResolver *cachedResolver
 	observeCheck    func(ns Ns, obj Obj, rel Rel, userId UserId, duration time.Duration, ok bool, isError bool)
 	observeList     func(ns Ns, rel Rel, userId UserId, duration time.Duration, isError bool)
@@ -247,6 +264,7 @@ func New(conn *grpc.ClientConn) *Client {
 	return &Client{
 		prefix:     "",
 		grpcClient: proto.NewCheckServiceClient(conn),
+		nsClient:   proto.NewNamespaceServiceClient(conn),
 	}
 }
 
@@ -257,6 +275,7 @@ func NewWithPrefix(conn *grpc.ClientConn, prefix string) *Client {
 	return &Client{
 		prefix:     prefix,
 		grpcClient: proto.NewCheckServiceClient(conn),
+		nsClient:   proto.NewNamespaceServiceClient(conn),
 	}
 }
 
@@ -430,6 +449,15 @@ func (c *Client) AddOneUserId(ctx context.Context, ns Ns, obj Obj, rel Rel, user
 	}}, nil, nil)
 }
 
+// AddOneUserIdWithExpires adds a user assignment that expires at expires (UTC).
+// Returns the commit zookie for read-your-writes.
+func (c *Client) AddOneUserIdWithExpires(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, expires time.Time) (Timestamp, error) {
+	exp := expires.UTC()
+	return c.Write(ctx, []Tuple{{
+		Ns: ns, Obj: obj, Rel: rel, UserId: userId, Expires: &exp,
+	}}, nil, nil)
+}
+
 // AddParent adds an inheritance relationship using the quasi-standard relation "parent".
 // Returns the commit zookie for read-your-writes.
 func (c *Client) AddParent(ctx context.Context, ns Ns, obj Obj, parentNs Ns, parentObj Obj) (Timestamp, error) {
@@ -532,6 +560,31 @@ func (c *Client) ExpandWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Re
 	}, nil
 }
 
+// ListNamespaces returns the namespace configs the check server loaded:
+// per namespace the declared relations and the rewrite kind of each.
+// Schema metadata only — no tuples.
+func (c *Client) ListNamespaces(ctx context.Context) ([]NamespaceMeta, error) {
+	res, err := c.nsClient.ListNamespaces(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, fmt.Errorf("list namespaces: %w", err)
+	}
+	out := make([]NamespaceMeta, 0, len(res.GetNamespaces()))
+	for _, ns := range res.GetNamespaces() {
+		rels := make([]RelationMeta, 0, len(ns.GetRelations()))
+		for _, r := range ns.GetRelations() {
+			rels = append(rels, RelationMeta{
+				Name: r.GetName(),
+				Kind: r.GetKind(),
+			})
+		}
+		out = append(out, NamespaceMeta{
+			Name:      ns.GetName(),
+			Relations: rels,
+		})
+	}
+	return out, nil
+}
+
 // GetAll returns every stored tuple on ⟨ns, obj⟩ (all relations).
 // Stored edges only — rewrites are not evaluated.
 func (c *Client) GetAll(ctx context.Context, ns Ns, obj Obj) (ReadResult, error) {
@@ -613,13 +666,15 @@ func tupleToProto(t *Tuple) (*proto.Tuple, error) {
 			Obj: string(t.UserSet.Obj),
 			Rel: string(t.UserSet.Rel),
 		}}
-		return pt, nil
-	}
-	if t.UserId != "" {
+	} else if t.UserId != "" {
 		pt.User = &proto.Tuple_UserId{UserId: string(t.UserId)}
-		return pt, nil
+	} else {
+		return nil, errors.New("tuple subject required (UserId or UserSet)")
 	}
-	return nil, errors.New("tuple subject required (UserId or UserSet)")
+	if t.Expires != nil {
+		pt.Condition = &proto.Tuple_Expires{Expires: t.Expires.UTC().Unix()}
+	}
+	return pt, nil
 }
 
 // tupleFromProto maps a wire tuple to the client model. Missing user is a
@@ -650,6 +705,10 @@ func tupleFromProto(pt *proto.Tuple) (Tuple, error) {
 		}
 	default:
 		return Tuple{}, fmt.Errorf("tuple %s:%s#%s unknown user type", t.Ns, t.Obj, t.Rel)
+	}
+	if exp, ok := pt.GetCondition().(*proto.Tuple_Expires); ok {
+		tm := time.Unix(exp.Expires, 0).UTC()
+		t.Expires = &tm
 	}
 	return t, nil
 }

@@ -3,6 +3,7 @@ package nioclient
 import (
 	"strings"
 	"testing"
+	"time"
 
 	proto "github.com/ecociel/nioclient-go/proto"
 )
@@ -197,6 +198,60 @@ func TestTupleToProtoRequiresSubject(t *testing.T) {
 	_, err := tupleToProto(&Tuple{Ns: "doc", Obj: "1", Rel: "viewer"})
 	if err == nil {
 		t.Fatal("expected error for missing subject")
+	}
+}
+
+func TestTupleToProtoExpires(t *testing.T) {
+	exp := time.Date(2030, 1, 15, 12, 0, 0, 0, time.UTC)
+	pt, err := tupleToProto(&Tuple{
+		Ns: "doc", Obj: "1", Rel: "viewer", UserId: "u1", Expires: &exp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cond, ok := pt.Condition.(*proto.Tuple_Expires)
+	if !ok {
+		t.Fatalf("condition: %#v", pt.Condition)
+	}
+	if cond.Expires != exp.Unix() {
+		t.Fatalf("expires = %d, want %d", cond.Expires, exp.Unix())
+	}
+}
+
+func TestTupleFromProtoExpires(t *testing.T) {
+	got, err := tupleFromProto(&proto.Tuple{
+		Ns: "doc", Obj: "1", Rel: "viewer",
+		User:      &proto.Tuple_UserId{UserId: "u1"},
+		Condition: &proto.Tuple_Expires{Expires: 1894785600},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Expires == nil {
+		t.Fatal("expected expires")
+	}
+	if got.Expires.Unix() != 1894785600 {
+		t.Fatalf("expires = %d", got.Expires.Unix())
+	}
+	if got.Expires.Location() != time.UTC {
+		t.Fatalf("location = %v, want UTC", got.Expires.Location())
+	}
+}
+
+func TestTupleRoundTripExpires(t *testing.T) {
+	exp := time.Unix(1894785600, 0).UTC()
+	pt, err := tupleToProto(&Tuple{
+		Ns: "doc", Obj: "1", Rel: "viewer", UserId: "u1", Expires: &exp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := tupleFromProto(pt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Expires == nil || !got.Expires.Equal(exp) {
+		t.Fatalf("expires round-trip: got %v want %v", got.Expires, exp)
 	}
 }
 
