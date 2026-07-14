@@ -90,6 +90,13 @@ principal, ok, err := client.CheckWithTimestamp(ctx, ns, obj, rel, userId, ts)
 `Write(ctx, add, del, precondition)` supports atomic multi-tuple commits and an
 optional OCC precondition zookie (`nil` = unconditional).
 
+`ContentChangeCheck` authorizes a content modification at the freshest snapshot
+and returns the zookie to store with the new content version.
+
+`Watch(ctx, ns, startTs)` tails the changelog for a namespace (paper §2.4.6).
+Call `Recv` on the returned stream: empty `Updates` is a heartbeat; non-empty
+is one atomic write at `Ts`. Resume from any received `Ts` (exclusive).
+
 # Request-scoped check memoization
 
 Pass `WithRequestMemo()` to `Wrap` to memoize check and list decisions for the

@@ -191,6 +191,39 @@ type NamespaceMeta struct {
 	Relations []RelationMeta
 }
 
+// ContentChangeCheckResult is the outcome of ContentChangeCheck: whether the
+// subject may modify content, and the evaluation snapshot zookie to store with
+// the new content version.
+type ContentChangeCheckResult struct {
+	Ok bool
+	Ts Timestamp
+}
+
+// WatchUpdate is one tuple change within an atomic write.
+type WatchUpdate struct {
+	Tuple   Tuple
+	Deleted bool // true = tombstone (delete), false = add
+}
+
+// WatchEvent is one Watch stream message. Ts is the watermark: every change
+// with commit ts <= Ts has been delivered. Empty Updates is a heartbeat
+// (quiet watermark advance). A non-empty Updates batch is one atomic write
+// committed at Ts — never split across messages — so any Ts is a safe resume
+// point (exclusive) for a later Watch.
+type WatchEvent struct {
+	Ts      Timestamp
+	Updates []WatchUpdate
+}
+
+// WatchStream is a server-streaming changelog tail for one namespace.
+// Call Recv until io.EOF or a non-nil error; cancel the context passed to
+// Watch to stop the stream.
+type WatchStream struct {
+	stream interface {
+		Recv() (*proto.WatchResponse, error)
+	}
+}
+
 // ReadFilter is one TupleSet for the Read API (paper §2.4.2 / §2.4.3).
 // Build with FilterByObject, FilterByUser, or FilterByUserSet.
 type ReadFilter struct {
@@ -529,6 +562,54 @@ func (c *Client) Write(ctx context.Context, add, del []Tuple, precondition *Time
 	return Timestamp(res.GetTs()), nil
 }
 
+// ContentChangeCheck authorizes a content modification against the freshest
+// snapshot (never a client-supplied zookie). Returns the evaluation zookie to
+// store with the new content version. userId may be a principal UUID or a
+// userset string ns:obj#rel (same as Check).
+func (c *Client) ContentChangeCheck(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (ContentChangeCheckResult, error) {
+	res, err := c.grpcClient.ContentChangeCheck(ctx, &proto.ContentChangeCheckRequest{
+		Ns:     string(ns),
+		Obj:    string(obj),
+		Rel:    string(rel),
+		UserId: string(userId),
+	})
+	if err != nil {
+		return ContentChangeCheckResult{}, fmt.Errorf("content_change_check %s,%s,%s: %w", ns, obj, rel, err)
+	}
+	return ContentChangeCheckResult{
+		Ok: res.GetOk(),
+		Ts: Timestamp(res.GetTs()),
+	}, nil
+}
+
+// Watch starts a server-streaming tail of the changelog for ns (Zanzibar
+// paper §2.4.6). Only changes committed after startTs are delivered,
+// oldest-first, interleaved with heartbeats (empty Updates). Cancel ctx to
+// stop. Resume later by passing any previously received event's Ts as startTs.
+func (c *Client) Watch(ctx context.Context, ns Ns, startTs Timestamp) (*WatchStream, error) {
+	stream, err := c.grpcClient.Watch(ctx, &proto.WatchRequest{
+		Ns:      string(ns),
+		StartTs: string(startTs),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("watch %s: %w", ns, err)
+	}
+	return &WatchStream{stream: stream}, nil
+}
+
+// Recv blocks until the next Watch event or an error. io.EOF means the stream
+// ended cleanly (context cancelled or server closed).
+func (s *WatchStream) Recv() (WatchEvent, error) {
+	if s == nil || s.stream == nil {
+		return WatchEvent{}, errors.New("watch: nil stream")
+	}
+	resp, err := s.stream.Recv()
+	if err != nil {
+		return WatchEvent{}, err
+	}
+	return watchEventFromProto(resp)
+}
+
 // Expand returns the effective userset of ⟨ns, obj, rel⟩ (rewrite rules applied).
 func (c *Client) Expand(ctx context.Context, ns Ns, obj Obj, rel Rel) (ExpandResult, error) {
 	return c.ExpandWithTimestamp(ctx, ns, obj, rel, TimestampEmpty)
@@ -675,6 +756,30 @@ func tupleToProto(t *Tuple) (*proto.Tuple, error) {
 		pt.Condition = &proto.Tuple_Expires{Expires: t.Expires.UTC().Unix()}
 	}
 	return pt, nil
+}
+
+func watchEventFromProto(resp *proto.WatchResponse) (WatchEvent, error) {
+	if resp == nil {
+		return WatchEvent{}, errors.New("nil watch response")
+	}
+	ev := WatchEvent{
+		Ts:      Timestamp(resp.GetTs()),
+		Updates: make([]WatchUpdate, 0, len(resp.GetUpdates())),
+	}
+	for i, u := range resp.GetUpdates() {
+		if u == nil {
+			return WatchEvent{}, fmt.Errorf("watch update[%d]: nil", i)
+		}
+		t, err := tupleFromProto(u.GetTuple())
+		if err != nil {
+			return WatchEvent{}, fmt.Errorf("watch update[%d]: %w", i, err)
+		}
+		ev.Updates = append(ev.Updates, WatchUpdate{
+			Tuple:   t,
+			Deleted: u.GetDeleted(),
+		})
+	}
+	return ev, nil
 }
 
 // tupleFromProto maps a wire tuple to the client model. Missing user is a

@@ -255,6 +255,82 @@ func TestTupleRoundTripExpires(t *testing.T) {
 	}
 }
 
+func TestWatchEventFromProtoHeartbeat(t *testing.T) {
+	ev, err := watchEventFromProto(&proto.WatchResponse{
+		Ts:      "AQAAAAAAAA==",
+		Updates: nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Ts != TimestampEmpty {
+		t.Fatalf("ts = %q", ev.Ts)
+	}
+	if len(ev.Updates) != 0 {
+		t.Fatalf("heartbeat must have empty updates, got %d", len(ev.Updates))
+	}
+}
+
+func TestWatchEventFromProtoAtomicWrite(t *testing.T) {
+	ev, err := watchEventFromProto(&proto.WatchResponse{
+		Ts: "commit-ts",
+		Updates: []*proto.Update{
+			{
+				Tuple: &proto.Tuple{
+					Ns: "doc", Obj: "1", Rel: "viewer",
+					User: &proto.Tuple_UserId{UserId: "u1"},
+				},
+				Deleted: false,
+			},
+			{
+				Tuple: &proto.Tuple{
+					Ns: "doc", Obj: "1", Rel: "editor",
+					User: &proto.Tuple_UserId{UserId: "u1"},
+				},
+				Deleted: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Ts != "commit-ts" {
+		t.Fatalf("ts = %q", ev.Ts)
+	}
+	if len(ev.Updates) != 2 {
+		t.Fatalf("updates = %d", len(ev.Updates))
+	}
+	if ev.Updates[0].Deleted || ev.Updates[0].Tuple.UserId != "u1" {
+		t.Fatalf("update[0]: %+v", ev.Updates[0])
+	}
+	if !ev.Updates[1].Deleted || ev.Updates[1].Tuple.Rel != "editor" {
+		t.Fatalf("update[1]: %+v", ev.Updates[1])
+	}
+}
+
+func TestWatchEventFromProtoMissingTupleUser(t *testing.T) {
+	_, err := watchEventFromProto(&proto.WatchResponse{
+		Ts: "t",
+		Updates: []*proto.Update{
+			{Tuple: &proto.Tuple{Ns: "doc", Obj: "1", Rel: "viewer"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing user")
+	}
+}
+
+func TestWatchStreamNilRecv(t *testing.T) {
+	var s *WatchStream
+	if _, err := s.Recv(); err == nil {
+		t.Fatal("expected error on nil stream")
+	}
+	s = &WatchStream{}
+	if _, err := s.Recv(); err == nil {
+		t.Fatal("expected error on empty stream")
+	}
+}
+
 func TestTupleToProtoUserSetWinsOverUserId(t *testing.T) {
 	us := UserSet{Ns: "g", Obj: "o", Rel: "r"}
 	pt, err := tupleToProto(&Tuple{
