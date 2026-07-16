@@ -3,6 +3,7 @@ package nioclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -287,5 +288,65 @@ func TestWrapPublicResourceNoCookieRunsAnonymous(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, string(Anonymous)) {
 		t.Fatalf("body = %q, want anonymous principal", body)
+	}
+}
+
+// problemErr satisfies Problemer so mapErrorAndRespond / a custom handler
+// can return a non-500 status for known domain failures.
+type problemErr struct {
+	msg    string
+	detail string
+	status int
+}
+
+func (e problemErr) Error() string  { return e.msg }
+func (e problemErr) Detail() string { return e.detail }
+func (e problemErr) Status() int    { return e.status }
+
+func errHandler(_ http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, _ User) error {
+	return fmt.Errorf("fetch task: %w", problemErr{msg: "not found", detail: "resource not found", status: http.StatusNotFound})
+}
+
+func TestWrapProblemerReturnsMappedStatus(t *testing.T) {
+	// Default mapper must surface Problemer status codes (not 500).
+	w := &resolvingWrapper{resolvePrincipal: "P"}
+	h := Wrap(w, extractTest, errHandler)
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("tok"), nil)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSetErrorHandlerIsInvokedByWrap(t *testing.T) {
+	// Regression for the silent no-op: SetErrorHandler used to write a
+	// variable that Wrap never read. Prove the custom mapper is on the wire.
+	t.Cleanup(func() { SetErrorHandler(nil) })
+
+	called := false
+	SetErrorHandler(func(err error, w http.ResponseWriter, _ *http.Request) string {
+		called = true
+		http.Error(w, "custom:"+err.Error(), http.StatusTeapot)
+		return ""
+	})
+
+	wrapper := &resolvingWrapper{resolvePrincipal: "P"}
+	h := Wrap(wrapper, extractTest, func(http.ResponseWriter, *http.Request, httprouter.Params, Resource, User) error {
+		return errors.New("boom")
+	})
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("tok"), nil)
+
+	if !called {
+		t.Fatal("custom error handler was never called")
+	}
+	if rr.Code != http.StatusTeapot {
+		t.Fatalf("status = %d, want 418; body=%q", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "custom:boom") {
+		t.Fatalf("body = %q, want custom:boom", body)
 	}
 }

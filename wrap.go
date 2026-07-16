@@ -62,17 +62,29 @@ func Observe(w http.ResponseWriter, r *http.Request, f func(w http.ResponseWrite
 	rw.elapsed = finish.Sub(start)
 
 	if err != nil {
-		if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
+		if errMsg := errorHandlerFunc(err, rw, r); errMsg != "" {
 			log.Printf("%s %s: error=%s duration=%s", r.Method, r.RequestURI, errMsg, rw.elapsed.String())
 		}
 	}
 }
 
+// ErrorHandlerFunc maps a handler error to an HTTP response. The returned
+// string is logged when non-empty (typically for unexpected 5xx errors).
 type ErrorHandlerFunc func(err error, w http.ResponseWriter, req *http.Request) (errMsg string)
 
+// errorHandlerFunc is the active mapper. Default is mapErrorAndRespond;
+// applications replace it via SetErrorHandler (e.g. to share domain
+// Problemer types). All Wrap/Observe paths must call this variable — never
+// mapErrorAndRespond directly — or SetErrorHandler is a silent no-op.
 var errorHandlerFunc = mapErrorAndRespond
 
+// SetErrorHandler replaces the error-to-HTTP mapper used by Wrap and Observe.
+// Pass nil to restore the built-in default.
 func SetErrorHandler(f ErrorHandlerFunc) {
+	if f == nil {
+		errorHandlerFunc = mapErrorAndRespond
+		return
+	}
 	errorHandlerFunc = f
 }
 
@@ -123,7 +135,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 
 		resource, err := extract(rw, r, p)
 		if err != nil {
-			errMsg := mapErrorAndRespond(notFound(err), rw, r)
+			errMsg := errorHandlerFunc(notFound(err), rw, r)
 			if errMsg != "" {
 				log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
 			}
@@ -151,7 +163,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 				//log.Printf("%s %s: no session cookie but public resource", r.Method, r.RequestURI)
 				err = hdl(rw, r, p, resource, &user)
 				if err != nil {
-					if errMsg := mapErrorAndRespond(err, rw, r); errMsg != "" {
+					if errMsg := errorHandlerFunc(err, rw, r); errMsg != "" {
 						log.Printf("%s %s: error=%s (extract)", r.Method, r.RequestURI, errMsg)
 					}
 				}
@@ -169,7 +181,7 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		// unknown/expired/revoked token redirects to signin with zero check RPCs.
 		userId, found, err := wrapper.ResolveToken(r.Context(), token)
 		if err != nil {
-			if errMsg := mapErrorAndRespond(fmt.Errorf("resolve: %w", err), rw, r); errMsg != "" {
+			if errMsg := errorHandlerFunc(fmt.Errorf("resolve: %w", err), rw, r); errMsg != "" {
 				log.Printf("%s %s: error=%s (resolve)", r.Method, r.RequestURI, errMsg)
 			}
 			return
