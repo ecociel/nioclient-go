@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,8 @@ type resolvingWrapper struct {
 	checkCalls       int
 	listCalls        int
 	lastCheckSubject Subject
+	checkSubjects    []Subject
+	listSubjects     []Subject
 }
 
 func (w *resolvingWrapper) Prefix() string { return w.prefix }
@@ -40,6 +43,7 @@ func (w *resolvingWrapper) ResolveToken(_ context.Context, _ string) (UserId, bo
 func (w *resolvingWrapper) Check(_ context.Context, _ Ns, _ Obj, _ Rel, sub Subject) (UserId, bool, error) {
 	w.checkCalls++
 	w.lastCheckSubject = sub
+	w.checkSubjects = append(w.checkSubjects, sub)
 	id, _ := sub.(UserId)
 	return id, true, nil
 }
@@ -48,8 +52,9 @@ func (w *resolvingWrapper) CheckWithTimestamp(ctx context.Context, ns Ns, obj Ob
 	return w.Check(ctx, ns, obj, rel, sub)
 }
 
-func (w *resolvingWrapper) List(_ context.Context, _ Ns, _ Rel, _ Subject) ([]string, error) {
+func (w *resolvingWrapper) List(_ context.Context, _ Ns, _ Rel, sub Subject) ([]string, error) {
 	w.listCalls++
+	w.listSubjects = append(w.listSubjects, sub)
 	return []string{"granted"}, nil
 }
 
@@ -443,5 +448,40 @@ func TestRequestMemoWaiterOnFailedFillReportsMiss(t *testing.T) {
 	}
 	if len(events) != 2 || events[0] != "check:false" || events[1] != "check:false" {
 		t.Fatalf("observer events = %v, want [check:false check:false]", events)
+	}
+}
+
+func TestWrapAuthenticatedHasRelAndListUseThePrincipal(t *testing.T) {
+	w := &resolvingWrapper{resolvePrincipal: 7}
+	h := Wrap(w, extractTest, func(rw http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, u User) error {
+		principal, authenticated := u.Principal()
+		viewer, err := u.HasRel("viewer")
+		if err != nil {
+			return err
+		}
+		p9, err := u.HasRel("project", "p9", "viewer")
+		if err != nil {
+			return err
+		}
+		objs, err := u.List("project", "viewer")
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(rw, "principal=%d authenticated=%t viewer=%t p9=%t list=%q", principal, authenticated, viewer, p9, objs)
+		return nil
+	})
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("tok"), nil)
+
+	want := `principal=7 authenticated=true viewer=true p9=true list=["granted"]`
+	if rr.Code != http.StatusOK || rr.Body.String() != want {
+		t.Fatalf("status=%d body=%q, want 200 %q", rr.Code, rr.Body.String(), want)
+	}
+	if !reflect.DeepEqual(w.checkSubjects, []Subject{UserId(7), UserId(7), UserId(7)}) {
+		t.Fatalf("check subjects = %v, want the gate plus two HasRel calls for 7", w.checkSubjects)
+	}
+	if !reflect.DeepEqual(w.listSubjects, []Subject{UserId(7)}) {
+		t.Fatalf("list subjects = %v, want one List call for 7", w.listSubjects)
 	}
 }
