@@ -23,10 +23,17 @@ programs in `cmd` have a server to talk to.
 
        docker compose up -d
 
-3. Wait until both gRPC services answer:
+3. Wait until both gRPC services answer. nio has no gRPC reflection, so give
+   `grpcurl` the proto files from the nio checkout:
 
-       grpcurl -plaintext localhost:50052 list
-       grpcurl -plaintext localhost:50053 list
+       grpcurl -plaintext -import-path ../nio/proto -proto iam.proto \
+         -d '{"ns":"project","obj":"p42","rel":"project.get","userId":"1"}' \
+         localhost:50052 am.CheckService/check
+       grpcurl -plaintext -import-path ../nio/proto -proto sessions.proto \
+         -d '{"token_hash":"0000000000000000000000000000000000000000000000000000000000000000"}' \
+         localhost:50053 am.SessionService/resolve
+
+   The first command prints `"ok": true`. The second prints `"notFound": {}`.
 
 | Host port | Service |
 | --- | --- |
@@ -49,6 +56,9 @@ Sign in as `bob` and keep the `session` cookie:
       --data-urlencode 'password=123456' \
       --data-urlencode 'tenant_id=default' \
       --data-urlencode 'back=/'
+
+The cookie is valid for the host `localhost` only. Send it to `localhost`, not
+to `127.0.0.1`.
 
 `go run ./cmd/server` listens on port 8080 and guards `/articles/:id` with the
 `article` namespace.
