@@ -11,9 +11,6 @@ package nioclient
 // answer. The one caveat is read-after-write WITHIN a request — a handler that
 // writes a tuple and then re-checks expecting to observe its own write. Such
 // handlers must not enable the memo (it is opt-in per route via WithRequestMemo).
-//
-// Concurrent identical misses wait on the first caller's fill, so a handler that
-// fans checks out across goroutines still issues one RPC per key.
 
 import (
 	"context"
@@ -72,16 +69,12 @@ type listMemoKey struct {
 
 var errMemoFillAborted = errors.New("request memo: fill aborted")
 
-// memoCell is one memoized answer. done closes once val and err are final, so
-// concurrent identical lookups wait on the first caller's fill.
 type memoCell[V any] struct {
 	done chan struct{}
 	val  V
 	err  error
 }
 
-// memoMap memoizes fills per key and collapses concurrent identical misses.
-// A failed fill is removed, so errors are never cached.
 type memoMap[K comparable, V any] struct {
 	mu    sync.Mutex
 	cells map[K]*memoCell[V]

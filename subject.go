@@ -67,7 +67,6 @@ type UserSet struct {
 
 func (UserSet) isSubject() {}
 
-// String returns the string representation of the user set.
 func (s UserSet) String() string {
 	return fmt.Sprintf("UserSet(Ns: %s, Obj: %s, Rel: %s)", s.Ns, s.Obj, s.Rel)
 }

@@ -18,7 +18,7 @@ import (
 // resolvingWrapper implements the Wrapper contract for the middleware tests.
 type resolvingWrapper struct {
 	prefix           string
-	resolvePrincipal UserId // 0 => not_found
+	resolvePrincipal UserId
 	resolveErr       error
 	checkCalls       int
 	lastCheckSubject Subject
@@ -109,7 +109,7 @@ func TestWrapResolvedTokenChecksPrincipal(t *testing.T) {
 }
 
 func TestWrapNotFoundRedirectsWithoutCheck(t *testing.T) {
-	w := &resolvingWrapper{prefix: "/app", resolvePrincipal: 0} // not_found
+	w := &resolvingWrapper{prefix: "/app", resolvePrincipal: 0}
 	h := Wrap(w, extractTest, okHandler)
 
 	rr := httptest.NewRecorder()
@@ -267,8 +267,8 @@ func TestRequestMemoObserverReportsHitMiss(t *testing.T) {
 		events = append(events, op+":"+map[bool]string{true: "hit", false: "miss"}[hit])
 	})
 
-	_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7)) // miss
-	_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7)) // hit
+	_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7))
+	_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7))
 
 	if len(events) != 2 || events[0] != "check:miss" || events[1] != "check:hit" {
 		t.Fatalf("observer events = %v, want [check:miss check:hit]", events)
