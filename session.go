@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
 	"sync"
@@ -40,10 +41,10 @@ func TokenHash(rawToken string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ResolvedSession is a resolved session: the principal UUID, its tenant, and
-// the wall-clock instant the session stops being valid.
+// ResolvedSession is a resolved session: the principal user ID, its tenant,
+// and the wall-clock instant the session stops being valid.
 type ResolvedSession struct {
-	Principal string
+	Principal UserId
 	TenantId  string
 	ExpiresAt time.Time
 }
@@ -328,11 +329,13 @@ func (f *grpcFetcher) fetch(ctx context.Context, tokenHash string) (*ResolvedSes
 		// unknown / expired / revoked — deliberately indistinguishable.
 		return nil, nil
 	}
+	principal, err := NewUserId(s.GetPrincipal())
+	if err != nil {
+		return nil, &resolveError{err: fmt.Errorf("session principal: %w", err)}
+	}
 	return &ResolvedSession{
-		Principal: s.GetPrincipal(),
+		Principal: principal,
 		TenantId:  s.GetTenantId(),
 		ExpiresAt: time.Unix(s.GetExpiresAtUnixSeconds(), 0),
 	}, nil
 }
-
-

@@ -12,7 +12,10 @@ import (
 func main() {
 	ns := os.Args[1]
 	rel := os.Args[2]
-	userId := os.Args[3]
+	userId, err := nioclient.ParseUserId(os.Args[3])
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	conn, err := nioclient.DialCheckInsecure("localhost:50052")
 	if err != nil {
@@ -21,7 +24,7 @@ func main() {
 
 	c := nioclient.New(conn)
 
-	res, err := c.ListResult(context.Background(), nioclient.Ns(ns), nioclient.Rel(rel), nioclient.UserId(userId))
+	res, err := c.ListResult(context.Background(), nioclient.Ns(ns), nioclient.Rel(rel), userId)
 	if err != nil {
 		log.Fatalf("list: %v", err)
 	}

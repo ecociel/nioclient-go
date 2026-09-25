@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,7 +15,10 @@ func main() {
 	ns := os.Args[1]
 	obj := os.Args[2]
 	rel := os.Args[3]
-	user := os.Args[4]
+	sub, err := parseSubject(os.Args[4])
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	conn, err := nioclient.DialCheckInsecure("localhost:50052")
 	if err != nil {
@@ -23,25 +27,27 @@ func main() {
 
 	c := nioclient.New(conn)
 
-	var ts nioclient.Timestamp
-	if strings.Contains(user, "#") {
-		a := strings.SplitN(user, ":", 2)
-		b := strings.SplitN(a[1], "#", 2)
-
-		userSet := nioclient.UserSet{
-			Ns:  nioclient.Ns(a[0]),
-			Obj: nioclient.Obj(b[0]),
-			Rel: nioclient.Rel(b[1]),
-		}
-		fmt.Printf("%v\n", userSet)
-		ts, err = c.AddOneUserSet(context.Background(),
-			nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), userSet)
-	} else {
-		ts, err = c.AddOneUserId(context.Background(),
-			nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), nioclient.UserId(user))
-	}
+	ts, err := c.AddOne(context.Background(), nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), sub)
 	if err != nil {
 		log.Fatalf("add-one: %v", err)
 	}
 	fmt.Printf("committed at ts=%s\n", ts)
+}
+
+func parseSubject(s string) (nioclient.Subject, error) {
+	switch s {
+	case nioclient.AllUsers.String():
+		return nioclient.AllUsers, nil
+	case nioclient.AuthenticatedUsers.String():
+		return nioclient.AuthenticatedUsers, nil
+	}
+	if !strings.Contains(s, "#") {
+		return nioclient.ParseUserId(s)
+	}
+	ns, rest, okNs := strings.Cut(s, ":")
+	obj, rel, okRel := strings.Cut(rest, "#")
+	if !okNs || !okRel {
+		return nil, errors.New("userset must be ns:obj#rel")
+	}
+	return nioclient.UserSet{Ns: nioclient.Ns(ns), Obj: nioclient.Obj(obj), Rel: nioclient.Rel(rel)}, nil
 }

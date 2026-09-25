@@ -13,7 +13,10 @@ func main() {
 	ns := os.Args[1]
 	obj := os.Args[2]
 	rel := os.Args[3]
-	userId := os.Args[4]
+	userId, err := nioclient.ParseUserId(os.Args[4])
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	conn, err := nioclient.DialCheckInsecure("localhost:50052")
 	if err != nil {
@@ -22,7 +25,7 @@ func main() {
 
 	c := nioclient.New(conn)
 
-	principal, ok, err := c.CheckWithTimestamp(context.Background(), nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), nioclient.UserId(userId), nioclient.TimestampEmpty)
+	principal, ok, err := c.CheckWithTimestamp(context.Background(), nioclient.Ns(ns), nioclient.Obj(obj), nioclient.Rel(rel), userId, nioclient.TimestampEmpty)
 	if err != nil {
 		log.Fatalf("Error: %s", err.Error())
 	}

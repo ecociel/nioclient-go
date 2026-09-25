@@ -18,35 +18,36 @@ import (
 // resolvingWrapper implements the Wrapper contract for the middleware tests.
 type resolvingWrapper struct {
 	prefix           string
-	resolvePrincipal string // "" => not_found
+	resolvePrincipal UserId // 0 => not_found
 	resolveErr       error
 	checkCalls       int
-	lastCheckUserId  UserId
+	lastCheckSubject Subject
 }
 
 func (w *resolvingWrapper) Prefix() string { return w.prefix }
 
 func (w *resolvingWrapper) ResolveToken(_ context.Context, _ string) (UserId, bool, error) {
 	if w.resolveErr != nil {
-		return "", false, w.resolveErr
+		return 0, false, w.resolveErr
 	}
-	if w.resolvePrincipal == "" {
-		return "", false, nil
+	if w.resolvePrincipal == 0 {
+		return 0, false, nil
 	}
-	return UserId(w.resolvePrincipal), true, nil
+	return w.resolvePrincipal, true, nil
 }
 
-func (w *resolvingWrapper) Check(_ context.Context, _ Ns, _ Obj, _ Rel, userId UserId) (Principal, bool, error) {
+func (w *resolvingWrapper) Check(_ context.Context, _ Ns, _ Obj, _ Rel, sub Subject) (UserId, bool, error) {
 	w.checkCalls++
-	w.lastCheckUserId = userId
-	return Principal(userId), true, nil
+	w.lastCheckSubject = sub
+	id, _ := sub.(UserId)
+	return id, true, nil
 }
 
-func (w *resolvingWrapper) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, _ Timestamp) (Principal, bool, error) {
-	return w.Check(ctx, ns, obj, rel, userId)
+func (w *resolvingWrapper) CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, sub Subject, _ Timestamp) (UserId, bool, error) {
+	return w.Check(ctx, ns, obj, rel, sub)
 }
 
-func (w *resolvingWrapper) List(_ context.Context, _ Ns, _ Rel, _ UserId) ([]string, error) {
+func (w *resolvingWrapper) List(_ context.Context, _ Ns, _ Rel, _ Subject) ([]string, error) {
 	return nil, nil
 }
 
@@ -72,8 +73,9 @@ func extractPublicTest(_ http.ResponseWriter, _ *http.Request, _ httprouter.Para
 }
 
 func okHandler(w http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, u User) error {
+	principal, authenticated := u.Principal()
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok:" + u.Principal()))
+	_, _ = fmt.Fprintf(w, "ok:%s:%t", principal, authenticated)
 	return nil
 }
 
@@ -86,7 +88,7 @@ func requestWithSession(token string) *http.Request {
 }
 
 func TestWrapResolvedTokenChecksPrincipal(t *testing.T) {
-	w := &resolvingWrapper{resolvePrincipal: "PRINCIPAL-UUID"}
+	w := &resolvingWrapper{resolvePrincipal: 3}
 	h := Wrap(w, extractTest, okHandler)
 
 	rr := httptest.NewRecorder()
@@ -98,16 +100,16 @@ func TestWrapResolvedTokenChecksPrincipal(t *testing.T) {
 	if w.checkCalls != 1 {
 		t.Fatalf("checkCalls = %d, want 1", w.checkCalls)
 	}
-	if w.lastCheckUserId != UserId("PRINCIPAL-UUID") {
-		t.Fatalf("check subject = %q, want the resolved principal", w.lastCheckUserId)
+	if w.lastCheckSubject != UserId(3) {
+		t.Fatalf("check subject = %v, want the resolved principal 3", w.lastCheckSubject)
 	}
-	if body := rr.Body.String(); !strings.Contains(body, "PRINCIPAL-UUID") {
-		t.Fatalf("body = %q, want resolved principal", body)
+	if body := rr.Body.String(); body != "ok:3:true" {
+		t.Fatalf("body = %q, want ok:3:true", body)
 	}
 }
 
 func TestWrapNotFoundRedirectsWithoutCheck(t *testing.T) {
-	w := &resolvingWrapper{prefix: "/app", resolvePrincipal: ""} // not_found
+	w := &resolvingWrapper{prefix: "/app", resolvePrincipal: 0} // not_found
 	h := Wrap(w, extractTest, okHandler)
 
 	rr := httptest.NewRecorder()
@@ -156,7 +158,7 @@ func memoProbeHandler(w http.ResponseWriter, _ *http.Request, _ httprouter.Param
 }
 
 func TestWrapRequestMemoDedupesChecks(t *testing.T) {
-	w := &resolvingWrapper{resolvePrincipal: "P"}
+	w := &resolvingWrapper{resolvePrincipal: 7}
 	h := Wrap(w, extractTest, memoProbeHandler, WithRequestMemo())
 
 	rr := httptest.NewRecorder()
@@ -172,7 +174,7 @@ func TestWrapRequestMemoDedupesChecks(t *testing.T) {
 }
 
 func TestWrapWithoutMemoRepeatsChecks(t *testing.T) {
-	w := &resolvingWrapper{resolvePrincipal: "P"}
+	w := &resolvingWrapper{resolvePrincipal: 7}
 	h := Wrap(w, extractTest, memoProbeHandler) // no WithRequestMemo
 
 	rr := httptest.NewRecorder()
@@ -189,15 +191,15 @@ func TestWrapWithoutMemoRepeatsChecks(t *testing.T) {
 
 func TestCheckMemoDoesNotCacheErrors(t *testing.T) {
 	calls := 0
-	failing := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ UserId) (Principal, bool, error) {
+	failing := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ Subject) (UserId, bool, error) {
 		calls++
-		return "", false, errors.New("boom")
+		return 0, false, errors.New("boom")
 	}
 	m := newRequestMemo(failing, nil, nil)
-	if _, _, err := m.check(context.Background(), "a", "b", "c", "u"); err == nil {
+	if _, _, err := m.check(context.Background(), "a", "b", "c", UserId(7)); err == nil {
 		t.Fatal("expected error")
 	}
-	if _, _, err := m.check(context.Background(), "a", "b", "c", "u"); err == nil {
+	if _, _, err := m.check(context.Background(), "a", "b", "c", UserId(7)); err == nil {
 		t.Fatal("expected error")
 	}
 	if calls != 2 {
@@ -207,10 +209,10 @@ func TestCheckMemoDoesNotCacheErrors(t *testing.T) {
 
 func TestRequestMemoSingleflightCollapsesConcurrentMisses(t *testing.T) {
 	var calls int32
-	slow := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ UserId) (Principal, bool, error) {
+	slow := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ Subject) (UserId, bool, error) {
 		atomic.AddInt32(&calls, 1)
 		time.Sleep(20 * time.Millisecond) // widen the in-flight window
-		return "P", true, nil
+		return 7, true, nil
 	}
 	m := newRequestMemo(slow, nil, nil)
 
@@ -219,7 +221,7 @@ func TestRequestMemoSingleflightCollapsesConcurrentMisses(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _ = m.check(context.Background(), "a", "b", "c", "u")
+			_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7))
 		}()
 	}
 	wg.Wait()
@@ -231,17 +233,17 @@ func TestRequestMemoSingleflightCollapsesConcurrentMisses(t *testing.T) {
 
 func TestRequestMemoListDedupesAndCopies(t *testing.T) {
 	calls := 0
-	lister := func(_ context.Context, _ Ns, _ Rel, _ UserId) ([]string, error) {
+	lister := func(_ context.Context, _ Ns, _ Rel, _ Subject) ([]string, error) {
 		calls++
 		return []string{"x", "y"}, nil
 	}
 	m := newRequestMemo(nil, lister, nil)
 
-	a, err := m.list(context.Background(), "n", "r", "u")
+	a, err := m.list(context.Background(), "n", "r", UserId(7))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if _, err := m.list(context.Background(), "n", "r", "u"); err != nil {
+	if _, err := m.list(context.Background(), "n", "r", UserId(7)); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if calls != 1 {
@@ -250,7 +252,7 @@ func TestRequestMemoListDedupesAndCopies(t *testing.T) {
 
 	// A caller mutating a returned slice must not corrupt the cache.
 	a[0] = "MUTATED"
-	c, _ := m.list(context.Background(), "n", "r", "u")
+	c, _ := m.list(context.Background(), "n", "r", UserId(7))
 	if c[0] != "x" {
 		t.Fatalf("caller mutation leaked into the cache: got %q", c[0])
 	}
@@ -258,36 +260,57 @@ func TestRequestMemoListDedupesAndCopies(t *testing.T) {
 
 func TestRequestMemoObserverReportsHitMiss(t *testing.T) {
 	var events []string
-	check := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ UserId) (Principal, bool, error) {
-		return "P", true, nil
+	check := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ Subject) (UserId, bool, error) {
+		return 7, true, nil
 	}
 	m := newRequestMemo(check, nil, func(op string, hit bool) {
 		events = append(events, op+":"+map[bool]string{true: "hit", false: "miss"}[hit])
 	})
 
-	_, _, _ = m.check(context.Background(), "a", "b", "c", "u") // miss
-	_, _, _ = m.check(context.Background(), "a", "b", "c", "u") // hit
+	_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7)) // miss
+	_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7)) // hit
 
 	if len(events) != 2 || events[0] != "check:miss" || events[1] != "check:hit" {
 		t.Fatalf("observer events = %v, want [check:miss check:hit]", events)
 	}
 }
 
+func anonymousProbeHandler(w http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, u User) error {
+	principal, authenticated := u.Principal()
+	ok, err := u.HasRel("viewer")
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(w, "principal=%d authenticated=%t viewer=%t", principal, authenticated, ok)
+	return nil
+}
+
 func TestWrapPublicResourceNoCookieRunsAnonymous(t *testing.T) {
 	w := &resolvingWrapper{}
-	h := Wrap(w, extractPublicTest, okHandler)
+	h := Wrap(w, extractPublicTest, anonymousProbeHandler)
 
 	rr := httptest.NewRecorder()
-	h(rr, requestWithSession(""), nil) // no session cookie
+	h(rr, requestWithSession(""), nil)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	if w.checkCalls != 0 {
-		t.Fatalf("checkCalls = %d, want 0 for public resource", w.checkCalls)
+	if body := rr.Body.String(); body != "principal=0 authenticated=false viewer=true" {
+		t.Fatalf("body = %q", body)
 	}
-	if body := rr.Body.String(); !strings.Contains(body, string(Anonymous)) {
-		t.Fatalf("body = %q, want anonymous principal", body)
+	if w.checkCalls != 1 || w.lastCheckSubject != AllUsers {
+		t.Fatalf("checks = %d with subject %v, want 1 with AllUsers", w.checkCalls, w.lastCheckSubject)
+	}
+}
+
+func BenchmarkWrapMemoHasRel(b *testing.B) {
+	w := &resolvingWrapper{resolvePrincipal: 7}
+	h := Wrap(w, extractTest, memoProbeHandler, WithRequestMemo())
+	req := requestWithSession("tok")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h(httptest.NewRecorder(), req, nil)
 	}
 }
 
@@ -309,7 +332,7 @@ func errHandler(_ http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ R
 
 func TestWrapProblemerReturnsMappedStatus(t *testing.T) {
 	// Default mapper must surface Problemer status codes (not 500).
-	w := &resolvingWrapper{resolvePrincipal: "P"}
+	w := &resolvingWrapper{resolvePrincipal: 7}
 	h := Wrap(w, extractTest, errHandler)
 
 	rr := httptest.NewRecorder()
@@ -332,7 +355,7 @@ func TestSetErrorHandlerIsInvokedByWrap(t *testing.T) {
 		return ""
 	})
 
-	wrapper := &resolvingWrapper{resolvePrincipal: "P"}
+	wrapper := &resolvingWrapper{resolvePrincipal: 7}
 	h := Wrap(wrapper, extractTest, func(http.ResponseWriter, *http.Request, httprouter.Params, Resource, User) error {
 		return errors.New("boom")
 	})
