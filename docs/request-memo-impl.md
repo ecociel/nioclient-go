@@ -1,9 +1,13 @@
 # Implementation prompt: request-scoped check memoization
 
 > **Status: IMPLEMENTED.** The full feature described below now lives in
-> `requestmemo.go` (`requestMemo`: check + list, per-request singleflight,
-> defensive list-slice copy, optional observer) wired into `Wrap`, with tests in
-> `wrap_test.go`. This document is retained as the design record. The only listed
+> `requestmemo.go` (`requestMemo`: check + list, per-request collapse of
+> concurrent misses, defensive list-slice copy, optional observer) wired into
+> `Wrap`, with tests in `wrap_test.go`. The memo keys hold the `Subject` value
+> directly, so the keys are comparable structs and no key string is built.
+> Because `singleflight.Group` accepts only string keys, a small generic
+> `memoMap` replaced it: the first miss stores an in-flight cell, and identical
+> concurrent lookups wait on that cell. This document is retained as the design record. The only listed
 > item deliberately not built is the optional `User.InvalidateChecks()` escape
 > hatch (no concrete caller — documentation covers the caveat instead).
 
@@ -36,13 +40,13 @@ metrics**. Everything below is the delta to production-ready.
 ## Normative design
 
 ### Key and timestamp
-- Cache key is `(ns, obj, rel, userId)`. The request's check timestamp is fixed
+- Cache key is `(ns, obj, rel, sub)`, where `sub` is the `Subject`. The request's check timestamp is fixed
   for the whole request (it is baked into the wrapped `user.check` closure —
   epoch, or the `check_ts` cookie value), so it is **not** part of the key. If a
   future change lets the timestamp vary mid-request, add `ts` to the key.
-- `userId` is the resolved principal (post-#245): the gate check and every
+- `sub` is the resolved principal `UserId` (post-#245): the gate check and every
   `HasRel` use the same principal, so their keys align and the gate populates
-  the memo for the handler.
+  the memo for the handler. An anonymous caller uses `AllUsers`.
 
 ### Opt-in, per route
 - Keep it opt-in via `WithRequestMemo()` (default off). Per-route control is the
