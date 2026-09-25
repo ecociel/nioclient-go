@@ -26,4 +26,4 @@ go.work.sum
 
 .idea
 test
-
+.DS_Store
