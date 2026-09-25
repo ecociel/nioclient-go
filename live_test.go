@@ -22,6 +22,7 @@ const (
 	liveCheckTarget   = "localhost:50052"
 	liveSessionTarget = "localhost:50053"
 	liveTimeout       = 15 * time.Second
+	visibilityTimeout = 30 * time.Second
 )
 
 func liveClient(t *testing.T) *Client {
@@ -139,7 +140,7 @@ func TestLiveWatchAndReadBySubject(t *testing.T) {
 	}
 }
 
-func TestLiveAnonymousHasRelAsksAllUsers(t *testing.T) {
+func TestLiveAnonymousHasRelDeniesWithoutCheck(t *testing.T) {
 	checkConn, err := DialCheckInsecure(liveCheckTarget)
 	if err != nil {
 		t.Fatalf("dial check: %v", err)
@@ -156,41 +157,51 @@ func TestLiveAnonymousHasRelAsksAllUsers(t *testing.T) {
 	if _, err := web.AddOne(ctx, "project", "p9", "viewer", AllUsers); err != nil {
 		t.Fatalf("write project:p9#viewer@allUsers: %v", err)
 	}
-	waitUntilAllowed(t, web.checkAPI, "p9")
+	if _, err := web.AddOne(ctx, "project", "p10", "viewer", AuthenticatedUsers); err != nil {
+		t.Fatalf("write project:p10#viewer@authenticatedUsers: %v", err)
+	}
+	waitUntilAllowed(t, web.checkAPI, "p9", UserId(77))
+	waitUntilAllowed(t, web.checkAPI, "p10", UserId(77))
 
 	h := Wrap(web, extractPublicTest, func(w http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, u User) error {
-		p9, err := u.HasRel("project", "p9", "viewer")
+		var answers []string
+		for _, obj := range []string{"p9", "p10", "p42"} {
+			ok, err := u.HasRel("project", obj, "viewer")
+			if err != nil {
+				return err
+			}
+			answers = append(answers, fmt.Sprintf("%s=%t", obj, ok))
+		}
+		objs, err := u.List("project", "viewer")
 		if err != nil {
 			return err
 		}
-		p42, err := u.HasRel("project", "p42", "viewer")
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintf(w, "p9=%t p42=%t", p9, p42)
+		_, _ = fmt.Fprintf(w, "%s list=%q", strings.Join(answers, " "), objs)
 		return nil
 	})
 	rr := httptest.NewRecorder()
 	h(rr, httptest.NewRequest(http.MethodGet, "/articles/1", nil), nil)
 
 	t.Logf("anonymous public resource: status=%d body=%q", rr.Code, rr.Body.String())
-	if rr.Code != http.StatusOK || rr.Body.String() != "p9=true p42=false" {
-		t.Fatalf("status=%d body=%q, want 200 p9=true p42=false", rr.Code, rr.Body.String())
+	want := `p9=false p10=false p42=false list=[]`
+	if rr.Code != http.StatusOK || rr.Body.String() != want {
+		t.Fatalf("status=%d body=%q, want 200 %q", rr.Code, rr.Body.String(), want)
 	}
 }
 
-func waitUntilAllowed(t *testing.T, c *checkAPI, obj Obj) {
+func waitUntilAllowed(t *testing.T, c *checkAPI, obj Obj, sub Subject) {
 	t.Helper()
-	deadline := time.Now().Add(liveTimeout)
+	deadline := time.Now().Add(visibilityTimeout)
 	for time.Now().Before(deadline) {
-		_, ok, err := c.Check(liveContext(t), "project", obj, "viewer", AllUsers)
+		_, ok, err := c.Check(liveContext(t), "project", obj, "viewer", sub)
 		if err != nil {
-			t.Fatalf("check project:%s#viewer@allUsers: %v", obj, err)
+			t.Fatalf("check project:%s#viewer@%v: %v", obj, sub, err)
 		}
 		if ok {
+			t.Logf("project:%s#viewer visible to %v", obj, sub)
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("project:%s#viewer@allUsers not visible within %s", obj, liveTimeout)
+	t.Fatalf("project:%s#viewer not visible to %v within %s", obj, sub, visibilityTimeout)
 }

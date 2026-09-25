@@ -8,7 +8,11 @@ import (
 type User interface {
 	// Principal returns the signed-in user's ID. false means anonymous.
 	Principal() (UserId, bool)
+	// HasRel reports whether the user holds a relation. For an anonymous
+	// user it returns false without asking check (nio issue #316).
 	HasRel(args ...string) (bool, error)
+	// List returns the objects on which the user holds rel. For an
+	// anonymous user it returns an empty list without asking check.
 	List(ns string, rel string) ([]string, error)
 	IsAuthenticated() bool
 }
@@ -31,13 +35,6 @@ func (u *user) IsAuthenticated() bool {
 	return u.authenticated
 }
 
-func (u *user) subject() Subject {
-	if !u.authenticated {
-		return AllUsers
-	}
-	return u.principal
-}
-
 func (u *user) HasRel(args ...string) (bool, error) {
 	var ns Ns
 	var obj Obj
@@ -58,7 +55,10 @@ func (u *user) HasRel(args ...string) (bool, error) {
 	default:
 		panic("HasRel requires 1 or 3 arguments")
 	}
-	_, ok, err := u.check(u.ctx, ns, obj, rel, u.subject())
+	if !u.authenticated {
+		return false, nil
+	}
+	_, ok, err := u.check(u.ctx, ns, obj, rel, u.principal)
 	if err != nil {
 		return false, fmt.Errorf("user check: %s %s %s: %w", ns, obj, rel, err)
 	}
@@ -66,7 +66,10 @@ func (u *user) HasRel(args ...string) (bool, error) {
 }
 
 func (u *user) List(ns string, rel string) ([]string, error) {
-	objs, err := u.list(u.ctx, Ns(ns), Rel(rel), u.subject())
+	if !u.authenticated {
+		return []string{}, nil
+	}
+	objs, err := u.list(u.ctx, Ns(ns), Rel(rel), u.principal)
 	if err != nil {
 		return nil, fmt.Errorf("list: %s %s: %w", ns, rel, err)
 	}

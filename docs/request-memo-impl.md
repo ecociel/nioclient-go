@@ -46,7 +46,8 @@ metrics**. Everything below is the delta to production-ready.
   future change lets the timestamp vary mid-request, add `ts` to the key.
 - `sub` is the resolved principal `UserId` (post-#245): the gate check and every
   `HasRel` use the same principal, so their keys align and the gate populates
-  the memo for the handler. An anonymous caller uses `AllUsers`.
+  the memo for the handler. An anonymous caller never reaches the memo: its
+  `HasRel` and `List` answer without check.
 
 ### Opt-in, per route
 - Keep it opt-in via `WithRequestMemo()` (default off). Per-route control is the

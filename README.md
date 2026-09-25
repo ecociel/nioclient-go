@@ -116,8 +116,11 @@ A `Subject` is who a tuple, check, or list is about. It is exactly one of:
 
 - a `UserId`, for example `nioclient.UserId(42)`
 - a `UserSet`, for example `nioclient.UserSet{Ns: "group", Obj: "eng", Rel: "member"}`
-- a `Wildcard`: `AllUsers` (every caller, signed in or not) or
-  `AuthenticatedUsers` (every signed-in user)
+- a `Wildcard`: `AllUsers` or `AuthenticatedUsers`, a grant to many users at
+  once
+
+nio `f7569b9` treats both wildcards as a grant to every user ID
+([nio#316](https://github.com/ecociel/nio/issues/316)).
 
 Proto3 JSON writes an `int64` as a decimal string. Write a `UserId` into JSON
 as a string too, because JavaScript loses precision above 2^53.
@@ -169,7 +172,10 @@ positive user ID is an error; the resolver never caches it.
 
 In a handler, `User.Principal()` returns `(UserId, bool)`. `false` means the
 caller is anonymous, which happens only on a public resource without a session
-cookie. `HasRel` and `List` for an anonymous caller ask about `AllUsers`.
+cookie. For an anonymous caller, `HasRel` returns `false` and `List` returns an
+empty list; neither calls check. Asking check about `AllUsers` instead is not
+safe: nio answers `true` for an object that grants only `authenticatedUsers`
+([nio#316](https://github.com/ecociel/nio/issues/316)).
 
 # Zookies (timestamps)
 

@@ -83,8 +83,8 @@ func userSetFromProto(us *proto.UserSet) UserSet {
 // Wildcard is a public subject that stands for many users at once.
 type Wildcard int32
 
-// AllUsers matches every caller, signed in or not. AuthenticatedUsers matches
-// every signed-in user.
+// AllUsers and AuthenticatedUsers grant a relation to many users at once. nio
+// f7569b9 treats both as a grant to every user ID (nio issue #316).
 const (
 	AllUsers           Wildcard = 1
 	AuthenticatedUsers Wildcard = 2

@@ -21,6 +21,7 @@ type resolvingWrapper struct {
 	resolvePrincipal UserId
 	resolveErr       error
 	checkCalls       int
+	listCalls        int
 	lastCheckSubject Subject
 }
 
@@ -48,7 +49,8 @@ func (w *resolvingWrapper) CheckWithTimestamp(ctx context.Context, ns Ns, obj Ob
 }
 
 func (w *resolvingWrapper) List(_ context.Context, _ Ns, _ Rel, _ Subject) ([]string, error) {
-	return nil, nil
+	w.listCalls++
+	return []string{"granted"}, nil
 }
 
 type testResource struct{}
@@ -277,11 +279,20 @@ func TestRequestMemoObserverReportsHitMiss(t *testing.T) {
 
 func anonymousProbeHandler(w http.ResponseWriter, _ *http.Request, _ httprouter.Params, _ Resource, u User) error {
 	principal, authenticated := u.Principal()
-	ok, err := u.HasRel("viewer")
+	viewer, err := u.HasRel("viewer")
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(w, "principal=%d authenticated=%t viewer=%t", principal, authenticated, ok)
+	p9, err := u.HasRel("project", "p9", "viewer")
+	if err != nil {
+		return err
+	}
+	objs, err := u.List("project", "viewer")
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(w, "principal=%d authenticated=%t viewer=%t p9=%t list=%q nil=%t",
+		principal, authenticated, viewer, p9, objs, objs == nil)
 	return nil
 }
 
@@ -295,11 +306,12 @@ func TestWrapPublicResourceNoCookieRunsAnonymous(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	if body := rr.Body.String(); body != "principal=0 authenticated=false viewer=true" {
-		t.Fatalf("body = %q", body)
+	want := `principal=0 authenticated=false viewer=false p9=false list=[] nil=false`
+	if body := rr.Body.String(); body != want {
+		t.Fatalf("body = %q, want %q", body, want)
 	}
-	if w.checkCalls != 1 || w.lastCheckSubject != AllUsers {
-		t.Fatalf("checks = %d with subject %v, want 1 with AllUsers", w.checkCalls, w.lastCheckSubject)
+	if w.checkCalls != 0 || w.listCalls != 0 {
+		t.Fatalf("check calls = %d, list calls = %d; want 0 and 0 for an anonymous caller", w.checkCalls, w.listCalls)
 	}
 }
 
