@@ -8,6 +8,77 @@ with the `julienschmidt/httprouter` framework.
 
 See the [cmd](cmd) directory for how to use with httprouter and for how to use the client.
 
+# Run nio locally
+
+`docker-compose.yml` starts nio `check` and `nio-client` on SQLite, so the
+programs in `cmd` have a server to talk to.
+
+1. Clone [ecociel/nio](https://github.com/ecociel/nio) next to this
+   repository, as `../nio`. Use nio `main` at `f7569b9` or later. Build the two
+   images in that checkout:
+
+       task build:check:sqlite build:client:sqlite
+
+   The tasks tag the images `nio-check:sqlite` and `nio-client:sqlite`. The
+   Taskfile sets `ARCHDIR` to `aarch64-linux-gnu` by default. On an x86_64
+   host, add `ARCHDIR=x86_64-linux-gnu` to the `task` command.
+
+2. Start the stack in this repository:
+
+       docker compose up -d
+
+3. Wait until both gRPC services answer. nio has no gRPC reflection, so give
+   `grpcurl` the proto files from the nio checkout:
+
+       grpcurl -plaintext -import-path ../nio/proto -proto iam.proto \
+         -d '{"ns":"project","obj":"p42","rel":"project.get","userId":"1"}' \
+         localhost:50052 am.CheckService/check
+       grpcurl -plaintext -import-path ../nio/proto -proto sessions.proto \
+         -d '{"token_hash":"0000000000000000000000000000000000000000000000000000000000000000"}' \
+         localhost:50053 am.SessionService/resolve
+
+   The first command prints `"ok": true`. The second prints `"notFound": {}`.
+
+| Host port | Service |
+| --- | --- |
+| 50052 | `am.CheckService` on `check` |
+| 50053 | `am.SessionService` on `nio-client` |
+| 8090 | `nio-client` sign-in pages, under `http://localhost:8090/auth` |
+
+The stack creates three local users. Each has the password `123456`.
+
+| User | ID | Grants |
+| --- | --- | --- |
+| `admin@local.local` | 1 | `iam:root#admin`, `project:p42#owner`, `project:p65#viewer` |
+| `anna@local.local` | 2 | `project:p42#editor`, `project:p65#viewer` |
+| `bob@local.local` | 3 | `project:p42#viewer`, `project:p65#viewer`, `article:a1#viewer` |
+
+Sign in as `bob` and keep the `session` cookie:
+
+    curl -s -c cookies.txt -o /dev/null -X POST http://localhost:8090/auth/signin \
+      --data-urlencode 'email=bob@local.local' \
+      --data-urlencode 'password=123456' \
+      --data-urlencode 'tenant_id=default' \
+      --data-urlencode 'back=/'
+
+The cookie is valid for the host `localhost` only. Send it to `localhost`, not
+to `127.0.0.1`.
+
+`go run ./cmd/server` listens on port 8080 and guards `/articles/:id` with the
+`article` namespace.
+
+A signed-in request to `cmd/server` does not work yet. nio `main` sends and
+expects user IDs as integers (nio issue #301). This client still sends them as
+strings. check refuses the request, and `cmd/server` answers HTTP 500 with
+`missing expected field: user`. A request without a cookie works: it gets a
+`303` to `/signin`.
+
+The stack is for local development only. It turns off client certificates on
+both gRPC services and uses a fixed, public `TENANT_ENCRYPTION_KEY`.
+
+The databases live in `./test`. Stop the stack with `docker compose down`.
+Delete `./test` to start again from empty databases.
+
 
 # Updating gRPC Code
 

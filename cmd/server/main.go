@@ -56,11 +56,11 @@ func getArticle(w http.ResponseWriter, r *http.Request, p httprouter.Params, res
 func main() {
 	// Callers dial both services with explicit targets/credentials — no env
 	// reads inside the library. Production: DialCheck/DialSession + LoadTLSCredentials.
-	checkConn, err := nioclient.DialCheckInsecure("localhost:50051")
+	checkConn, err := nioclient.DialCheckInsecure("localhost:50052")
 	if err != nil {
 		log.Fatalf("connect check-service: %v", err)
 	}
-	sessionConn, err := nioclient.DialSessionInsecure("localhost:50052")
+	sessionConn, err := nioclient.DialSessionInsecure("localhost:50053")
 	if err != nil {
 		log.Fatalf("connect session-service: %v", err)
 	}
