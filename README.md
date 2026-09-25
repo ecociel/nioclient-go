@@ -63,6 +63,9 @@ to `127.0.0.1`.
 `go run ./cmd/server` listens on port 8080 and guards `/articles/:id` with the
 `article` namespace.
 
+The stack is for local development only. It turns off client certificates on
+both gRPC services and uses a fixed, public `TENANT_ENCRYPTION_KEY`.
+
 The databases live in `./test`. Stop the stack with `docker compose down`.
 Delete `./test` to start again from empty databases.
 
