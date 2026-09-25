@@ -67,12 +67,6 @@ to `127.0.0.1`.
 `go run ./cmd/server` listens on port 8080 and guards `/articles/:id` with the
 `article` namespace.
 
-A signed-in request to `cmd/server` does not work yet. nio `main` sends and
-expects user IDs as integers (nio issue #301). This client still sends them as
-strings. check refuses the request, and `cmd/server` answers HTTP 500 with
-`missing expected field: user`. A request without a cookie works: it gets a
-`303` to `/signin`.
-
 The stack is for local development only. It turns off client certificates on
 both gRPC services and uses a fixed, public `TENANT_ENCRYPTION_KEY`.
 
@@ -219,9 +213,9 @@ same subject collapses to far fewer RPCs:
     router.GET(route, nioclient.Wrap(nioClient, extract, handler, nioclient.WithRequestMemo()))
 
 Identical `(ns, obj, rel, principal)` checks (and `(ns, rel, principal)` lists)
-are answered from an in-request cache; concurrent identical misses are collapsed
-with singleflight so a handler fanning checks across goroutines still issues one
-RPC per key. List results are copied on return, so callers may mutate them
+are answered from an in-request cache; concurrent identical misses wait on the
+first caller's RPC, so a handler fanning checks across goroutines still issues
+one RPC per key. List results are copied on return, so callers may mutate them
 freely.
 
 This is free of staleness risk (a request is one logical instant) but is

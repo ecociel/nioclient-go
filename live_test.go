@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,10 +41,6 @@ func liveContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func uniqueObj(prefix string) Obj {
-	return Obj(fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()))
-}
-
 func TestLiveCheckRejectsInvalidUserId(t *testing.T) {
 	c := liveClient(t)
 	for _, id := range []UserId{0, -1} {
@@ -57,12 +55,12 @@ func TestLiveCheckRejectsInvalidUserId(t *testing.T) {
 func TestLiveExpandReturnsEverySubjectKind(t *testing.T) {
 	c := liveClient(t)
 	ctx := liveContext(t)
-	owners := UserSet{Ns: "project", Obj: "p42", Rel: "owner"}
+	parent := UserSet{Ns: "project", Obj: "p42", Rel: RelUnspecified}
 
 	ts, err := c.Write(ctx, []Tuple{
 		{Ns: "project", Obj: "p11", Rel: "viewer", Subject: UserId(42)},
 		{Ns: "project", Obj: "p11", Rel: "viewer", Subject: AllUsers},
-		{Ns: "project", Obj: "p11", Rel: "viewer", Subject: owners},
+		{Ns: "project", Obj: "p11", Rel: "viewer", Subject: parent},
 	}, nil, nil)
 	if err != nil {
 		t.Fatalf("write: %v", err)
@@ -73,24 +71,24 @@ func TestLiveExpandReturnsEverySubjectKind(t *testing.T) {
 		t.Fatalf("expand: %v", err)
 	}
 	t.Logf("expand project:p11#viewer = %+v", res)
-	if !slices.Contains(res.UserIds, UserId(42)) {
-		t.Errorf("UserIds = %v, want 42", res.UserIds)
+	if !reflect.DeepEqual(res.UserIds, []UserId{42}) {
+		t.Errorf("UserIds = %v, want [42]", res.UserIds)
 	}
-	if !slices.Contains(res.Wildcards, AllUsers) {
-		t.Errorf("Wildcards = %v, want AllUsers", res.Wildcards)
+	if !reflect.DeepEqual(res.Wildcards, []Wildcard{AllUsers}) {
+		t.Errorf("Wildcards = %v, want [allUsers]", res.Wildcards)
 	}
-	if !slices.Contains(res.Usersets, owners) {
-		t.Errorf("Usersets = %v, want %v", res.Usersets, owners)
+	if !reflect.DeepEqual(res.Usersets, []UserSet{parent}) {
+		t.Errorf("Usersets = %v, want [%v]", res.Usersets, parent)
 	}
 }
 
 func TestLiveWatchAndReadBySubject(t *testing.T) {
 	c := liveClient(t)
 	ctx := liveContext(t)
-	objUser := uniqueObj("watch-user")
-	objAll := uniqueObj("watch-all")
+	run := time.Now().UnixNano()
+	obj := func(name string) Obj { return Obj(fmt.Sprintf("%s-%d", name, run)) }
 
-	start, err := c.AddOne(ctx, "project", uniqueObj("watch-start"), "viewer", UserId(42))
+	start, err := c.AddOne(ctx, "project", obj("watch-start"), "viewer", UserId(42))
 	if err != nil {
 		t.Fatalf("write start marker: %v", err)
 	}
@@ -98,15 +96,15 @@ func TestLiveWatchAndReadBySubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	if _, err := c.AddOne(ctx, "project", objUser, "viewer", UserId(42)); err != nil {
+	if _, err := c.AddOne(ctx, "project", obj("watch-user"), "viewer", UserId(42)); err != nil {
 		t.Fatalf("write user tuple: %v", err)
 	}
-	last, err := c.AddOne(ctx, "project", objAll, "viewer", AllUsers)
+	last, err := c.AddOne(ctx, "project", obj("watch-all"), "viewer", AllUsers)
 	if err != nil {
 		t.Fatalf("write allUsers tuple: %v", err)
 	}
 
-	want := map[Obj]Subject{objUser: UserId(42), objAll: AllUsers}
+	want := map[Obj]Subject{obj("watch-user"): UserId(42), obj("watch-all"): AllUsers}
 	for len(want) > 0 {
 		ev, err := stream.Recv()
 		if err != nil {
@@ -125,15 +123,19 @@ func TestLiveWatchAndReadBySubject(t *testing.T) {
 		t.Fatalf("read by subject: %v", err)
 	}
 	t.Logf("read by subject 42: %d tuples", len(res.Tuples))
-	found := false
+	var fromThisRun []Obj
 	for _, tuple := range res.Tuples {
-		if tuple.Subject != UserId(42) {
-			t.Errorf("read returned tuple for %v, want only 42", tuple.Subject)
+		if tuple.Subject != UserId(42) || tuple.Rel != "viewer" {
+			t.Errorf("read returned %s:%s#%s@%v, want only viewer tuples for 42", tuple.Ns, tuple.Obj, tuple.Rel, tuple.Subject)
 		}
-		found = found || tuple.Obj == objUser
+		if strings.HasSuffix(string(tuple.Obj), fmt.Sprintf("-%d", run)) {
+			fromThisRun = append(fromThisRun, tuple.Obj)
+		}
 	}
-	if !found {
-		t.Errorf("read by subject 42 misses project:%s#viewer", objUser)
+	slices.Sort(fromThisRun)
+	wrote := []Obj{obj("watch-start"), obj("watch-user")}
+	if !reflect.DeepEqual(fromThisRun, wrote) {
+		t.Errorf("read by subject 42 returned this run's objects %v, want exactly %v", fromThisRun, wrote)
 	}
 }
 
