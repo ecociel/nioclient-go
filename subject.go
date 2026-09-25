@@ -8,8 +8,9 @@ import (
 	proto "github.com/ecociel/nioclient-go/proto"
 )
 
-// Subject is who a tuple, check, or list is about: a UserId, a UserSet, or a
-// Wildcard. No other type implements it.
+// Subject is who a tuple, check, or list is about. Only the value types
+// UserId, UserSet, and Wildcard are accepted; a pointer to one of them also
+// satisfies the interface but fails with an error when sent.
 type Subject interface {
 	isSubject()
 }

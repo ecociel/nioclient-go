@@ -223,6 +223,9 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 				_, _ = w.Write([]byte("Forbidden"))
 				return nil
 			}
+			if principal == 0 {
+				return fmt.Errorf("check: %w", ErrEmptyPrincipal)
+			}
 
 			user.principal = principal
 			user.authenticated = true

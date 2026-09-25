@@ -97,7 +97,7 @@ func (m *memoMap[K, V]) get(key K, fill func() (V, error)) (val V, hit bool, err
 		m.fill(key, cell, fill)
 	}
 	<-cell.done
-	return cell.val, hit, cell.err
+	return cell.val, hit && cell.err == nil, cell.err
 }
 
 func (m *memoMap[K, V]) fill(key K, cell *memoCell[V], fill func() (V, error)) {

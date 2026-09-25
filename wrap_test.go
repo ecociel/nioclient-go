@@ -207,7 +207,7 @@ func TestCheckMemoDoesNotCacheErrors(t *testing.T) {
 	}
 }
 
-func TestRequestMemoSingleflightCollapsesConcurrentMisses(t *testing.T) {
+func TestRequestMemoCollapsesConcurrentMisses(t *testing.T) {
 	var calls int32
 	slow := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ Subject) (UserId, bool, error) {
 		atomic.AddInt32(&calls, 1)
@@ -371,5 +371,65 @@ func TestSetErrorHandlerIsInvokedByWrap(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, "custom:boom") {
 		t.Fatalf("body = %q, want custom:boom", body)
+	}
+}
+
+type zeroPrincipalWrapper struct {
+	resolvingWrapper
+}
+
+func (w *zeroPrincipalWrapper) Check(_ context.Context, _ Ns, _ Obj, _ Rel, _ Subject) (UserId, bool, error) {
+	w.checkCalls++
+	return 0, true, nil
+}
+
+func TestWrapRejectsGrantWithoutPrincipal(t *testing.T) {
+	w := &zeroPrincipalWrapper{resolvingWrapper{resolvePrincipal: 7}}
+	h := Wrap(w, extractTest, okHandler)
+
+	rr := httptest.NewRecorder()
+	h(rr, requestWithSession("tok"), nil)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%q", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); strings.HasPrefix(body, "ok:") {
+		t.Fatalf("handler ran with body %q", body)
+	}
+}
+
+func TestRequestMemoWaiterOnFailedFillReportsMiss(t *testing.T) {
+	var calls int32
+	release := make(chan struct{})
+	failing := func(_ context.Context, _ Ns, _ Obj, _ Rel, _ Subject) (UserId, bool, error) {
+		atomic.AddInt32(&calls, 1)
+		<-release
+		return 0, false, errors.New("boom")
+	}
+	var mu sync.Mutex
+	var events []string
+	m := newRequestMemo(failing, nil, func(op string, hit bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, fmt.Sprintf("%s:%t", op, hit))
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, _ = m.check(context.Background(), "a", "b", "c", UserId(7))
+		}()
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("underlying calls = %d, want 1 (the waiter must share the leader's fill)", got)
+	}
+	if len(events) != 2 || events[0] != "check:false" || events[1] != "check:false" {
+		t.Fatalf("observer events = %v, want [check:false check:false]", events)
 	}
 }

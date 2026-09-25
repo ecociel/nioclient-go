@@ -134,7 +134,8 @@ type ReadResult struct {
 }
 
 // Tuple is a relationship edge for Write (add or delete) and Read results.
-// Expires, when non-nil, sets the tuple condition to that unix second (UTC).
+// Subject is required. Expires, when non-nil, sets the tuple condition to that
+// unix second (UTC).
 type Tuple struct {
 	Ns      Ns
 	Obj     Obj
@@ -520,8 +521,7 @@ func (c *checkAPI) Write(ctx context.Context, add, del []Tuple, precondition *Ti
 		req.DelTuples = append(req.DelTuples, pt)
 	}
 	if precondition != nil {
-		ts := string(*precondition)
-		req.Ts = &ts
+		req.Ts = precondition.wire()
 	}
 
 	res, err := c.grpcClient.Write(ctx, req)

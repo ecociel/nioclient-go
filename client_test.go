@@ -100,8 +100,8 @@ func containsAll(s string, parts ...string) bool {
 
 func TestTupleToProtoRequiresSubject(t *testing.T) {
 	_, err := tupleToProto(&Tuple{Ns: "doc", Obj: "1", Rel: "viewer"})
-	if err == nil {
-		t.Fatal("expected error for missing subject")
+	if err == nil || err.Error() != "tuple doc:1#viewer: unsupported subject <nil>" {
+		t.Fatalf("error = %v, want tuple doc:1#viewer: unsupported subject <nil>", err)
 	}
 }
 
@@ -222,7 +222,19 @@ type fakeCheckService struct {
 	proto.CheckServiceClient
 	checkReq  *proto.CheckRequest
 	checkRes  *proto.CheckResponse
+	listReq   *proto.ListRequest
+	cccReq    *proto.ContentChangeCheckRequest
 	expandRes *proto.ExpandResponse
+}
+
+func (f *fakeCheckService) List(_ context.Context, in *proto.ListRequest, _ ...grpc.CallOption) (*proto.ListResponse, error) {
+	f.listReq = in
+	return &proto.ListResponse{}, nil
+}
+
+func (f *fakeCheckService) ContentChangeCheck(_ context.Context, in *proto.ContentChangeCheckRequest, _ ...grpc.CallOption) (*proto.ContentChangeCheckResponse, error) {
+	f.cccReq = in
+	return &proto.ContentChangeCheckResponse{}, nil
 }
 
 func (f *fakeCheckService) Check(_ context.Context, in *proto.CheckRequest, _ ...grpc.CallOption) (*proto.CheckResponse, error) {
@@ -414,4 +426,83 @@ func TestCheckPrincipalBySubject(t *testing.T) {
 			t.Errorf("%s: Check = %d, %v, %v; want %d, %v, %v", tc.name, got, ok, err, tc.want, tc.wantOk, tc.wantErr)
 		}
 	}
+}
+
+func TestRequestsCarryUserSetAndWildcardSubjects(t *testing.T) {
+	wireGrp := &proto.UserSet{Ns: "grp", Obj: "eng", Rel: "member"}
+	empty := gproto.String("AQAAAAAAAA==")
+	cases := []struct {
+		sub   Subject
+		check *proto.CheckRequest
+		list  *proto.ListRequest
+		ccc   *proto.ContentChangeCheckRequest
+	}{
+		{
+			UserSet{Ns: "grp", Obj: "eng", Rel: "member"},
+			&proto.CheckRequest{Ns: "doc", Obj: "1", Rel: "viewer", Ts: empty, User: &proto.CheckRequest_UserSet{UserSet: wireGrp}},
+			&proto.ListRequest{Ns: "doc", Rel: "viewer", Ts: empty, User: &proto.ListRequest_UserSet{UserSet: wireGrp}},
+			&proto.ContentChangeCheckRequest{Ns: "doc", Obj: "1", Rel: "viewer", User: &proto.ContentChangeCheckRequest_UserSet{UserSet: wireGrp}},
+		},
+		{
+			AllUsers,
+			&proto.CheckRequest{Ns: "doc", Obj: "1", Rel: "viewer", Ts: empty, User: &proto.CheckRequest_Wildcard{Wildcard: proto.Wildcard_ALL_USERS}},
+			&proto.ListRequest{Ns: "doc", Rel: "viewer", Ts: empty, User: &proto.ListRequest_Wildcard{Wildcard: proto.Wildcard_ALL_USERS}},
+			&proto.ContentChangeCheckRequest{Ns: "doc", Obj: "1", Rel: "viewer", User: &proto.ContentChangeCheckRequest_Wildcard{Wildcard: proto.Wildcard_ALL_USERS}},
+		},
+	}
+	for _, tc := range cases {
+		f := &fakeCheckService{checkRes: &proto.CheckResponse{Ok: true}}
+		c := clientWith(f)
+		ctx := context.Background()
+		if _, _, err := c.Check(ctx, "doc", "1", "viewer", tc.sub); err != nil {
+			t.Fatalf("%v: check: %v", tc.sub, err)
+		}
+		if _, err := c.List(ctx, "doc", "viewer", tc.sub); err != nil {
+			t.Fatalf("%v: list: %v", tc.sub, err)
+		}
+		if _, err := c.ContentChangeCheck(ctx, "doc", "1", "viewer", tc.sub); err != nil {
+			t.Fatalf("%v: content change check: %v", tc.sub, err)
+		}
+		if !gproto.Equal(f.checkReq, tc.check) {
+			t.Errorf("%v: check request = %v, want %v", tc.sub, f.checkReq, tc.check)
+		}
+		if !gproto.Equal(f.listReq, tc.list) {
+			t.Errorf("%v: list request = %v, want %v", tc.sub, f.listReq, tc.list)
+		}
+		if !gproto.Equal(f.cccReq, tc.ccc) {
+			t.Errorf("%v: content change check request = %v, want %v", tc.sub, f.cccReq, tc.ccc)
+		}
+	}
+}
+
+func TestWriteOmitsEmptyPrecondition(t *testing.T) {
+	f := &fakeWriteService{}
+	c := &Client{checkAPI: &checkAPI{grpcClient: f}}
+	tuples := []Tuple{{Ns: "doc", Obj: "1", Rel: "viewer", Subject: UserId(1)}}
+
+	empty := Timestamp("")
+	if _, err := c.Write(context.Background(), tuples, nil, &empty); err != nil {
+		t.Fatal(err)
+	}
+	if f.req.Ts != nil {
+		t.Fatalf(`precondition "": Ts = %q, want nil`, *f.req.Ts)
+	}
+
+	ts := TimestampEmpty
+	if _, err := c.Write(context.Background(), tuples, nil, &ts); err != nil {
+		t.Fatal(err)
+	}
+	if f.req.Ts == nil || *f.req.Ts != "AQAAAAAAAA==" {
+		t.Fatalf("precondition TimestampEmpty: Ts = %v, want AQAAAAAAAA==", f.req.Ts)
+	}
+}
+
+type fakeWriteService struct {
+	proto.CheckServiceClient
+	req *proto.WriteRequest
+}
+
+func (f *fakeWriteService) Write(_ context.Context, in *proto.WriteRequest, _ ...grpc.CallOption) (*proto.WriteResponse, error) {
+	f.req = in
+	return &proto.WriteResponse{Ts: "AQAAAAAAAA=="}, nil
 }
