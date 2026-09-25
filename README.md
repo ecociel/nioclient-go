@@ -67,12 +67,6 @@ to `127.0.0.1`.
 `go run ./cmd/server` listens on port 8080 and guards `/articles/:id` with the
 `article` namespace.
 
-A signed-in request to `cmd/server` does not work yet. nio `main` sends and
-expects user IDs as integers (nio issue #301). This client still sends them as
-strings. check refuses the request, and `cmd/server` answers HTTP 500 with
-`missing expected field: user`. A request without a cookie works: it gets a
-`303` to `/signin`.
-
 The stack is for local development only. It turns off client certificates on
 both gRPC services and uses a fixed, public `TENANT_ENCRYPTION_KEY`.
 
@@ -108,9 +102,28 @@ relations:
 - viewer path: `RelIamGet` (`iam.get`)
 - admin path: `RelIamUpdate` (`iam.update`), `RelServiceAccountCreate`
 
-Roles that carry direct grants: `RelAdmin`, `RelEditor`, `RelViewer`. Public
-subject markers: `UserIdAllUsers`, `UserIdAuthenticatedUsers`. The pointer
-object/rel keyword is `"..."` (`ObjUnspecified` / `RelUnspecified`).
+Roles that carry direct grants: `RelAdmin`, `RelEditor`, `RelViewer`. The
+pointer object/rel keyword is `"..."` (`ObjUnspecified` / `RelUnspecified`).
+
+# User IDs and subjects
+
+A user ID is a `UserId`, a positive `int64`. Parse text such as a CLI argument
+with `ParseUserId`, which accepts only a decimal from 1 to
+9223372036854775807. Convert a number with `NewUserId`, which rejects zero and
+negative values.
+
+A `Subject` is who a tuple, check, or list is about. It is exactly one of:
+
+- a `UserId`, for example `nioclient.UserId(42)`
+- a `UserSet`, for example `nioclient.UserSet{Ns: "group", Obj: "eng", Rel: "member"}`
+- a `Wildcard`: `AllUsers` or `AuthenticatedUsers`, a grant to many users at
+  once
+
+nio `f7569b9` treats both wildcards as a grant to every user ID
+([nio#316](https://github.com/ecociel/nio/issues/316)).
+
+Proto3 JSON writes an `int64` as a decimal string. Write a `UserId` into JSON
+as a string too, because JavaScript loses precision above 2^53.
 
 # Construction
 
@@ -153,8 +166,16 @@ used when `WithResolverConfig` is omitted.
 Opaque session tokens are resolved via `am.SessionService` on nio-client
 (issue #243/#245) on `*SessionClient` only. Wrap hashes the cookie token
 (`sha256`, hex — the raw token never leaves the process), resolves it, and
-sends the principal UUID to `check`. Unknown / expired / revoked tokens
-redirect to signin with zero check RPCs.
+sends the principal user ID to `check`. Unknown / expired / revoked tokens
+redirect to signin with zero check RPCs. A session whose principal is not a
+positive user ID is an error; the resolver never caches it.
+
+In a handler, `User.Principal()` returns `(UserId, bool)`. `false` means the
+caller is anonymous, which happens only on a public resource without a session
+cookie. For an anonymous caller, `HasRel` returns `false` and `List` returns an
+empty list; neither calls check. Asking check about `AllUsers` instead is not
+safe: nio answers `true` for an object that grants only `authenticatedUsers`
+([nio#316](https://github.com/ecociel/nio/issues/316)).
 
 # Zookies (timestamps)
 
@@ -162,15 +183,22 @@ Check/list/write use **opaque packed zookies** (standard Base64 of 7 bytes:
 `[epoch:u8][millis:u48 BE]`). Treat them as opaque: store and echo only.
 
 - `TimestampEmpty` (`AQAAAAAAAA==`) — no fresher-than constraint; server picks a snapshot
-- Write helpers (`AddOneUserId`, `AddOneUserSet`, `DeleteOne*`, `Write`) return the **commit** zookie
+- Write helpers (`AddOne`, `AddOneWithExpires`, `DeleteOne`, `AddParent`, `Write`) return the **commit** zookie
 - `ListResult` / `ListWithTimestamp` return the **evaluation** snapshot zookie
 - Pass a zookie into `CheckWithTimestamp` / `ListWithTimestamp` for read-your-writes
 
 ```go
-ts, err := client.AddOneUserId(ctx, ns, obj, rel, userId)
+ts, err := client.AddOne(ctx, "project", "p1", "viewer", nioclient.UserId(42))
 // ...
-principal, ok, err := client.CheckWithTimestamp(ctx, ns, obj, rel, userId, ts)
+principal, ok, err := client.CheckWithTimestamp(ctx, "project", "p1", "project.get", nioclient.UserId(42), ts)
+
+_, err = client.AddOne(ctx, "project", "p1", "viewer", nioclient.AllUsers)
+res, err := client.ReadBySubject(ctx, "project", nioclient.UserId(42), nil)
 ```
+
+`Check` returns the principal only for a `UserId` subject. For a `UserSet` or
+`Wildcard` subject, the returned `UserId` is zero. `ReadBySubject` and
+`FilterBySubject` reverse-read the stored tuples of one subject.
 
 `Write(ctx, add, del, precondition)` supports atomic multi-tuple commits and an
 optional OCC precondition zookie (`nil` = unconditional).
@@ -191,9 +219,9 @@ same subject collapses to far fewer RPCs:
     router.GET(route, nioclient.Wrap(nioClient, extract, handler, nioclient.WithRequestMemo()))
 
 Identical `(ns, obj, rel, principal)` checks (and `(ns, rel, principal)` lists)
-are answered from an in-request cache; concurrent identical misses are collapsed
-with singleflight so a handler fanning checks across goroutines still issues one
-RPC per key. List results are copied on return, so callers may mutate them
+are answered from an in-request cache; concurrent identical misses wait on the
+first caller's RPC, so a handler fanning checks across goroutines still issues
+one RPC per key. List results are copied on return, so callers may mutate them
 freely.
 
 This is free of staleness risk (a request is one logical instant) but is

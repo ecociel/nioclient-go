@@ -49,7 +49,8 @@ var RouteArticleResource = ArticleResource{
 
 func getArticle(w http.ResponseWriter, r *http.Request, p httprouter.Params, resource nioclient.Resource, user nioclient.User) error {
 	articleResource := resource.(*ArticleResource)
-	fmt.Fprintf(w, "Article id=%s", articleResource.ID)
+	principal, _ := user.Principal()
+	fmt.Fprintf(w, "Article id=%s principal=%s", articleResource.ID, principal)
 	return nil
 }
 

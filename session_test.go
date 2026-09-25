@@ -6,6 +6,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	proto "github.com/ecociel/nioclient-go/proto"
+	"google.golang.org/grpc"
 )
 
 type countingFetcher struct {
@@ -43,7 +46,7 @@ func (f *countingFetcher) setErr(err error) {
 
 func sessionValidFor(mins int) *ResolvedSession {
 	return &ResolvedSession{
-		Principal: "11111111-1111-1111-1111-111111111111",
+		Principal: 11,
 		ExpiresAt: time.Now().Add(time.Duration(mins) * time.Minute),
 	}
 }
@@ -161,5 +164,45 @@ func TestBackendErrorPropagates(t *testing.T) {
 	f.setErr(&resolveError{transport: false, err: errors.New("boom")})
 	if _, err := r.resolve("k"); err == nil {
 		t.Fatal("backend (non-transport) error must propagate, not serve stale")
+	}
+}
+
+type fakeSessionService struct {
+	calls     int
+	principal int64
+}
+
+func (f *fakeSessionService) Resolve(_ context.Context, _ *proto.ResolveRequest, _ ...grpc.CallOption) (*proto.ResolveResponse, error) {
+	f.calls++
+	return &proto.ResolveResponse{Outcome: &proto.ResolveResponse_Session{Session: &proto.Session{
+		Principal:            f.principal,
+		ExpiresAtUnixSeconds: time.Now().Add(time.Hour).Unix(),
+	}}}, nil
+}
+
+func TestResolveRejectsZeroPrincipal(t *testing.T) {
+	svc := &fakeSessionService{principal: 0}
+	cfg := testCfg()
+	cfg.StaleIfError = 5 * time.Second
+	r := newCachedResolver(&grpcFetcher{client: svc}, cfg)
+
+	if s, err := r.resolve("k"); err == nil {
+		t.Fatalf("resolve = %+v, want an error for principal 0", s)
+	}
+	if _, err := r.resolve("k"); err == nil {
+		t.Fatal("second resolve served a cached answer, want the error again")
+	}
+	if svc.calls != 2 {
+		t.Fatalf("fetch calls = %d, want 2", svc.calls)
+	}
+}
+
+func TestResolveParsesPrincipal(t *testing.T) {
+	svc := &fakeSessionService{principal: 3}
+	r := newCachedResolver(&grpcFetcher{client: svc}, testCfg())
+
+	s, err := r.resolve("k")
+	if err != nil || s == nil || s.Principal != 3 {
+		t.Fatalf("resolve = %+v, %v; want principal 3", s, err)
 	}
 }

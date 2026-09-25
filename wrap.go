@@ -119,9 +119,9 @@ type Wrapper interface {
 	// check. found=false with a nil error means the token is
 	// unknown/expired/revoked; Wrap then redirects to signin with zero check RPCs.
 	ResolveToken(ctx context.Context, token string) (userId UserId, found bool, err error)
-	Check(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error)
-	CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId, ts Timestamp) (principal Principal, ok bool, err error)
-	List(ctx context.Context, ns Ns, rel Rel, userId UserId) ([]string, error)
+	Check(ctx context.Context, ns Ns, obj Obj, rel Rel, sub Subject) (principal UserId, ok bool, err error)
+	CheckWithTimestamp(ctx context.Context, ns Ns, obj Obj, rel Rel, sub Subject, ts Timestamp) (principal UserId, ok bool, err error)
+	List(ctx context.Context, ns Ns, rel Rel, sub Subject) ([]string, error)
 }
 
 const Impossible = Rel("impossible")
@@ -149,12 +149,11 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 		//fmt.Printf("Requires: %s,%s,%s (%s)\n", ns, obj, rel, r.URL) // TODO remove
 
 		user := user{
-			ns:        ns,
-			obj:       obj,
-			principal: Anonymous,
-			ctx:       r.Context(),
-			check:     wrapper.Check,
-			list:      wrapper.List,
+			ns:    ns,
+			obj:   obj,
+			ctx:   r.Context(),
+			check: wrapper.Check,
+			list:  wrapper.List,
 		}
 
 		sessionCookie, err := r.Cookie("session")
@@ -200,8 +199,8 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 			if checkTimestampCookie.Value == "" {
 				checkTimestamp = TimestampEmpty
 			}
-			user.check = func(ctx context.Context, ns Ns, obj Obj, rel Rel, userId UserId) (principal Principal, ok bool, err error) {
-				return wrapper.CheckWithTimestamp(ctx, ns, obj, rel, userId, checkTimestamp)
+			user.check = func(ctx context.Context, ns Ns, obj Obj, rel Rel, sub Subject) (UserId, bool, error) {
+				return wrapper.CheckWithTimestamp(ctx, ns, obj, rel, sub, checkTimestamp)
 			}
 		}
 
@@ -224,8 +223,12 @@ func Wrap(wrapper Wrapper, extract func(http.ResponseWriter, *http.Request, http
 				_, _ = w.Write([]byte("Forbidden"))
 				return nil
 			}
+			if principal == 0 {
+				return fmt.Errorf("check: %w", ErrEmptyPrincipal)
+			}
 
 			user.principal = principal
+			user.authenticated = true
 			return hdl(w, r, p, resource, &user)
 		})
 	})
