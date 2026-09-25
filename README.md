@@ -13,11 +13,15 @@ See the [cmd](cmd) directory for how to use with httprouter and for how to use t
 `docker-compose.yml` starts nio `check` and `nio-client` on SQLite, so the
 programs in `cmd` have a server to talk to.
 
-1. Build the two images in a checkout of [ecociel/nio](https://github.com/ecociel/nio):
+1. Clone [ecociel/nio](https://github.com/ecociel/nio) next to this
+   repository, as `../nio`. Use nio `main` at `f7569b9` or later. Build the two
+   images in that checkout:
 
        task build:check:sqlite build:client:sqlite
 
-   The tasks tag the images `nio-check:sqlite` and `nio-client:sqlite`.
+   The tasks tag the images `nio-check:sqlite` and `nio-client:sqlite`. The
+   Taskfile sets `ARCHDIR` to `aarch64-linux-gnu` by default. On an x86_64
+   host, add `ARCHDIR=x86_64-linux-gnu` to the `task` command.
 
 2. Start the stack in this repository:
 
@@ -62,6 +66,12 @@ to `127.0.0.1`.
 
 `go run ./cmd/server` listens on port 8080 and guards `/articles/:id` with the
 `article` namespace.
+
+A signed-in request to `cmd/server` does not work yet. nio `main` sends and
+expects user IDs as integers (nio issue #301). This client still sends them as
+strings. check refuses the request, and `cmd/server` answers HTTP 500 with
+`missing expected field: user`. A request without a cookie works: it gets a
+`303` to `/signin`.
 
 The stack is for local development only. It turns off client certificates on
 both gRPC services and uses a fixed, public `TENANT_ENCRYPTION_KEY`.
