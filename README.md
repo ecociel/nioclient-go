@@ -8,6 +8,54 @@ with the `julienschmidt/httprouter` framework.
 
 See the [cmd](cmd) directory for how to use with httprouter and for how to use the client.
 
+# Run nio locally
+
+`docker-compose.yml` starts nio `check` and `nio-client` on SQLite, so the
+programs in `cmd` have a server to talk to.
+
+1. Build the two images in a checkout of [ecociel/nio](https://github.com/ecociel/nio):
+
+       task build:check:sqlite build:client:sqlite
+
+   The tasks tag the images `nio-check:sqlite` and `nio-client:sqlite`.
+
+2. Start the stack in this repository:
+
+       docker compose up -d
+
+3. Wait until both gRPC services answer:
+
+       grpcurl -plaintext localhost:50052 list
+       grpcurl -plaintext localhost:50053 list
+
+| Host port | Service |
+| --- | --- |
+| 50052 | `am.CheckService` on `check` |
+| 50053 | `am.SessionService` on `nio-client` |
+| 8090 | `nio-client` sign-in pages, under `http://localhost:8090/auth` |
+
+The stack creates three local users. Each has the password `123456`.
+
+| User | ID | Grants |
+| --- | --- | --- |
+| `admin@local.local` | 1 | `iam:root#admin`, `project:p42#owner`, `project:p65#viewer` |
+| `anna@local.local` | 2 | `project:p42#editor`, `project:p65#viewer` |
+| `bob@local.local` | 3 | `project:p42#viewer`, `project:p65#viewer`, `article:a1#viewer` |
+
+Sign in as `bob` and keep the `session` cookie:
+
+    curl -s -c cookies.txt -o /dev/null -X POST http://localhost:8090/auth/signin \
+      --data-urlencode 'email=bob@local.local' \
+      --data-urlencode 'password=123456' \
+      --data-urlencode 'tenant_id=default' \
+      --data-urlencode 'back=/'
+
+`go run ./cmd/server` listens on port 8080 and guards `/articles/:id` with the
+`article` namespace.
+
+The databases live in `./test`. Stop the stack with `docker compose down`.
+Delete `./test` to start again from empty databases.
+
 
 # Updating gRPC Code
 
