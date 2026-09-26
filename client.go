@@ -514,6 +514,9 @@ func (c *checkAPI) Write(ctx context.Context, add, del []Tuple, precondition *Ti
 		req.AddTuples = append(req.AddTuples, pt)
 	}
 	for i := range del {
+		if del[i].Expires != nil {
+			return "", fmt.Errorf("write del[%d]: tuple %s:%s#%s: a deleted tuple cannot carry Expires", i, del[i].Ns, del[i].Obj, del[i].Rel)
+		}
 		pt, err := tupleToProto(&del[i])
 		if err != nil {
 			return "", fmt.Errorf("write del[%d]: %w", i, err)
@@ -558,6 +561,9 @@ func (c *checkAPI) ContentChangeCheck(ctx context.Context, ns Ns, obj Obj, rel R
 // oldest-first, interleaved with heartbeats (empty Updates). Cancel ctx to
 // stop. Resume later by passing any previously received event's Ts as startTs.
 func (c *checkAPI) Watch(ctx context.Context, ns Ns, startTs Timestamp) (*WatchStream, error) {
+	if startTs == "" {
+		return nil, fmt.Errorf("watch %s: start timestamp is required", ns)
+	}
 	stream, err := c.grpcClient.Watch(ctx, &proto.WatchRequest{
 		Ns:      string(ns),
 		StartTs: string(startTs),
@@ -673,13 +679,14 @@ func (c *checkAPI) ReadBySubject(ctx context.Context, ns Ns, sub Subject, rel *R
 	return c.Read(ctx, FilterBySubject(ns, sub, rel))
 }
 
-// Read returns stored tuples matching filters at any current snapshot.
+// Read returns stored tuples matching filters at the latest snapshot.
 func (c *checkAPI) Read(ctx context.Context, filters ...ReadFilter) (ReadResult, error) {
-	return c.ReadWithTimestamp(ctx, TimestampEmpty, filters...)
+	return c.ReadWithTimestamp(ctx, "", filters...)
 }
 
 // ReadWithTimestamp returns stored tuples matching filters at a snapshot at
-// least as fresh as ts. The returned Ts is the snapshot the server used.
+// least as fresh as ts. An empty ts reads the latest snapshot. The returned Ts
+// is the snapshot the server used.
 func (c *checkAPI) ReadWithTimestamp(ctx context.Context, ts Timestamp, filters ...ReadFilter) (ReadResult, error) {
 	if len(filters) == 0 {
 		return ReadResult{}, errors.New("read: at least one filter required")
