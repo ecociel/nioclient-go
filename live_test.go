@@ -205,3 +205,21 @@ func waitUntilAllowed(t *testing.T, c *checkAPI, obj Obj, sub Subject) {
 	}
 	t.Fatalf("project:%s#viewer not visible to %v within %s", obj, sub, visibilityTimeout)
 }
+
+func TestLiveGetAllSeesOwnWrite(t *testing.T) {
+	c := liveClient(t)
+	ctx := liveContext(t)
+	obj := Obj(fmt.Sprintf("read-latest-%d", time.Now().UnixNano()))
+
+	if _, err := c.AddOne(ctx, "project", obj, "viewer", UserId(42)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	res, err := c.GetAll(ctx, "project", obj)
+	if err != nil {
+		t.Fatalf("get all: %v", err)
+	}
+	want := []Tuple{{Ns: "project", Obj: obj, Rel: "viewer", Subject: UserId(42)}}
+	if !reflect.DeepEqual(res.Tuples, want) {
+		t.Fatalf("GetAll right after the write = %v, want %v", res.Tuples, want)
+	}
+}

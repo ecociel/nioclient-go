@@ -506,3 +506,73 @@ func (f *fakeWriteService) Write(_ context.Context, in *proto.WriteRequest, _ ..
 	f.req = in
 	return &proto.WriteResponse{Ts: "AQAAAAAAAA=="}, nil
 }
+
+type fakeReadService struct {
+	proto.CheckServiceClient
+	readReq  *proto.ReadRequest
+	watchReq *proto.WatchRequest
+}
+
+func (f *fakeReadService) Read(_ context.Context, in *proto.ReadRequest, _ ...grpc.CallOption) (*proto.ReadResponse, error) {
+	f.readReq = in
+	return &proto.ReadResponse{}, nil
+}
+
+func (f *fakeReadService) Watch(_ context.Context, in *proto.WatchRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[proto.WatchResponse], error) {
+	f.watchReq = in
+	return nil, nil
+}
+
+func TestReadWithoutTimestampReadsLatest(t *testing.T) {
+	f := &fakeReadService{}
+	c := &Client{checkAPI: &checkAPI{grpcClient: f}}
+
+	if _, err := c.GetAll(context.Background(), "doc", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if f.readReq.Ts != nil {
+		t.Fatalf("GetAll: Ts = %q, want nil (latest snapshot)", *f.readReq.Ts)
+	}
+
+	if _, err := c.ReadWithTimestamp(context.Background(), TimestampEmpty, FilterByObject("doc", "1", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if f.readReq.Ts == nil || *f.readReq.Ts != "AQAAAAAAAA==" {
+		t.Fatalf("ReadWithTimestamp(TimestampEmpty): Ts = %v, want AQAAAAAAAA==", f.readReq.Ts)
+	}
+}
+
+func TestWatchRejectsEmptyStartTs(t *testing.T) {
+	f := &fakeReadService{}
+	c := &Client{checkAPI: &checkAPI{grpcClient: f}}
+
+	_, err := c.Watch(context.Background(), "doc", "")
+	if err == nil || err.Error() != "watch doc: start timestamp is required" {
+		t.Fatalf("Watch(\"\"): err = %v, want start timestamp is required", err)
+	}
+	if f.watchReq != nil {
+		t.Fatalf("Watch(\"\") sent a request: %v", f.watchReq)
+	}
+
+	if _, err := c.Watch(context.Background(), "doc", TimestampEmpty); err != nil {
+		t.Fatal(err)
+	}
+	if f.watchReq.GetStartTs() != "AQAAAAAAAA==" {
+		t.Fatalf("Watch(TimestampEmpty): StartTs = %q, want AQAAAAAAAA==", f.watchReq.GetStartTs())
+	}
+}
+
+func TestWriteRejectsExpiresOnDelete(t *testing.T) {
+	f := &fakeWriteService{}
+	c := &Client{checkAPI: &checkAPI{grpcClient: f}}
+	exp := time.Unix(1700000000, 0).UTC()
+	del := []Tuple{{Ns: "doc", Obj: "1", Rel: "viewer", Subject: UserId(1), Expires: &exp}}
+
+	_, err := c.Write(context.Background(), nil, del, nil)
+	if err == nil || err.Error() != "write del[0]: tuple doc:1#viewer: a deleted tuple cannot carry Expires" {
+		t.Fatalf("err = %v, want del[0] Expires rejection", err)
+	}
+	if f.req != nil {
+		t.Fatalf("Write sent a request: %v", f.req)
+	}
+}
