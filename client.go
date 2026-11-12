@@ -319,15 +319,24 @@ func (c *SessionClient) Prefix() string {
 // pass to check. found=false with a nil error means the token is
 // unknown/expired/revoked; the caller redirects to signin without any check RPC.
 // Only SessionClient has this method — RPC-only *Client cannot call it.
-func (c *SessionClient) ResolveToken(_ context.Context, token string) (userId UserId, found bool, err error) {
-	session, err := c.sessionResolver.resolve(TokenHash(token))
+func (c *SessionClient) ResolveToken(ctx context.Context, token string) (userId UserId, found bool, err error) {
+	session, found, err := c.ResolveSession(ctx, token)
+	return session.Principal, found, err
+}
+
+// ResolveSession resolves an opaque session token like ResolveToken and
+// returns the whole session: the principal, the nio tenant it signed in
+// through and its expiry. found=false with a nil error means the token is
+// unknown/expired/revoked.
+func (c *SessionClient) ResolveSession(_ context.Context, token string) (session ResolvedSession, found bool, err error) {
+	s, err := c.sessionResolver.resolve(TokenHash(token))
 	if err != nil {
-		return 0, false, fmt.Errorf("resolve session: %w", err)
+		return ResolvedSession{}, false, fmt.Errorf("resolve session: %w", err)
 	}
-	if session == nil {
-		return 0, false, nil
+	if s == nil {
+		return ResolvedSession{}, false, nil
 	}
-	return session.Principal, true, nil
+	return *s, true, nil
 }
 
 // WithObserveCheck sets the observe function for checks on an RPC-only client.
