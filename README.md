@@ -136,7 +136,7 @@ Two client types keep misuse a **compile error**:
 | Type | Constructor | Use |
 |---|---|---|
 | `*Client` | `New(checkConn)` | RPC only (Check / List / Write / …) |
-| `*SessionClient` | `NewWithSession(check, session, opts…)` | RPC + session; implements `Wrapper` for `Wrap` |
+| `*SessionClient` | `NewWithSession(check, session, opts…)` | RPC + session; implements `Wrapper` for `Wrap`; `ResolveSession` also returns the session's tenant |
 
 ```go
 // RPC-only — cannot be passed to Wrap

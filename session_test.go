@@ -206,3 +206,30 @@ func TestResolveParsesPrincipal(t *testing.T) {
 		t.Fatalf("resolve = %+v, %v; want principal 3", s, err)
 	}
 }
+
+func TestResolveSessionReturnsTenant(t *testing.T) {
+	s := sessionValidFor(120)
+	s.TenantId = "contoso"
+	c := &SessionClient{sessionResolver: newCachedResolver(&countingFetcher{session: s}, testCfg())}
+
+	got, found, err := c.ResolveSession(context.Background(), "token")
+	if err != nil || !found {
+		t.Fatalf("ResolveSession: found=%v err=%v", found, err)
+	}
+	if got.TenantId != "contoso" || got.Principal != s.Principal {
+		t.Fatalf("ResolveSession = %+v, want tenant contoso and principal %d", got, s.Principal)
+	}
+	principal, found, err := c.ResolveToken(context.Background(), "token")
+	if err != nil || !found || principal != s.Principal {
+		t.Fatalf("ResolveToken = %d found=%v err=%v", principal, found, err)
+	}
+}
+
+func TestResolveSessionUnknownToken(t *testing.T) {
+	c := &SessionClient{sessionResolver: newCachedResolver(&countingFetcher{session: nil}, testCfg())}
+
+	got, found, err := c.ResolveSession(context.Background(), "nope")
+	if err != nil || found || got != (ResolvedSession{}) {
+		t.Fatalf("ResolveSession = %+v found=%v err=%v, want zero, false, nil", got, found, err)
+	}
+}
